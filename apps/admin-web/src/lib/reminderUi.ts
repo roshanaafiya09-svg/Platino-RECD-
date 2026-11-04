@@ -53,6 +53,6 @@ export function escalationInfo(r: EscalationLike | null, policyHours: number | n
 
 /** " - attempt 3" for events that recorded their attempt number; "" for older events (nothing is invented). */
 export function attemptSuffix(e: { type: string; attempt?: number | null }): string {
-  const hasAttempt = ["sent", "delivery_failed", "in_app_recorded", "escalated", "escalation_no_recipient"].includes(e.type);
+  const hasAttempt = ["sent", "delivery_failed", "in_app_recorded", "escalated", "escalation_no_recipient", "repeat_sent", "repeat_delivery_failed", "repeat_in_app_recorded"].includes(e.type);
   return hasAttempt && typeof e.attempt === "number" && Number.isFinite(e.attempt) && e.attempt > 0 ? ` - attempt ${e.attempt}` : "";
 }

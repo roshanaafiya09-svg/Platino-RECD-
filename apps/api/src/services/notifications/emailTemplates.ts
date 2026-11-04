@@ -145,6 +145,7 @@ export function renderEmail(templateKey: string, data: Record<string, unknown>):
       `Site: ${data.siteName ?? "not recorded"}`,
       `RECD serial no.: ${data.serialNo ?? "not recorded"}`,
       `Due date: ${data.dueDate ?? "-"}${data.overdue ? " (OVERDUE)" : ""}`,
+      typeof data.daysOverdue === "number" && data.daysOverdue > 0 ? `Days overdue: ${data.daysOverdue}` : null,
       data.link ? `Open: ${data.link}` : null,
     ].filter((l): l is string => Boolean(l));
     const heading = escalated

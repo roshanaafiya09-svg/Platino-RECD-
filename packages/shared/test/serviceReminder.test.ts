@@ -87,19 +87,23 @@ test("reminder policy: empty = off; values are bounded", () => {
   assert.equal(reminderPolicySchema.safeParse({}).success, false, "both fields must be stated, so switching off is deliberate");
 });
 
-test("the proposed workflow (3 days, 24 hours) is a valid policy, but it is only a proposal: the stored default stays OFF", () => {
-  assert.deepEqual({ ...PROPOSED_REMINDER_POLICY }, { reminderLeadDays: 3, reminderEscalationHours: 24 });
+test("the proposed workflow (2 days, 24 hours) is a valid policy, but it is only a proposal: the stored default stays OFF", () => {
+  assert.equal(PROPOSED_REMINDER_POLICY.reminderLeadDays, 2, "the proposed / default lead time is 2 days before the due date");
+  assert.equal(PROPOSED_REMINDER_POLICY.reminderEscalationHours, 24, "the escalation timing is unchanged");
+  assert.deepEqual({ ...PROPOSED_REMINDER_POLICY }, { reminderLeadDays: 2, reminderEscalationHours: 24 });
   assert.equal(reminderPolicySchema.safeParse(PROPOSED_REMINDER_POLICY).success, true);
   assert.deepEqual({ ...REMINDER_POLICY_DEFAULTS }, { reminderLeadDays: null, reminderEscalationHours: null });
 });
 
-test("the proposed lead time: eligible from 3 calendar days before the due date, not before", () => {
+test("the proposed lead time: eligible from 2 calendar days before the due date, not before", () => {
   const due = new Date("2026-10-22T00:00:00.000Z");
   const at = (iso: string) => new Date(iso);
-  assert.equal(reminderEligible(due, at("2026-10-19T00:00:00.000Z"), 3), true, "exactly 3 days before");
-  assert.equal(reminderEligible(due, at("2026-10-19T23:59:00.000Z"), 3), true);
-  assert.equal(reminderEligible(due, at("2026-10-18T23:59:00.000Z"), 3), false, "4 days and a minute before: too early");
-  assert.equal(reminderEligible(due, at("2026-10-25T00:00:00.000Z"), 3), true, "overdue activities are always eligible");
+  const lead = PROPOSED_REMINDER_POLICY.reminderLeadDays;
+  assert.equal(lead, 2);
+  assert.equal(reminderEligible(due, at("2026-10-20T00:00:00.000Z"), lead), true, "exactly 2 days before");
+  assert.equal(reminderEligible(due, at("2026-10-20T23:59:00.000Z"), lead), true);
+  assert.equal(reminderEligible(due, at("2026-10-19T23:59:00.000Z"), lead), false, "3 days and a minute before: too early");
+  assert.equal(reminderEligible(due, at("2026-10-25T00:00:00.000Z"), lead), true, "overdue activities are always eligible");
   assert.equal(reminderEligible(due, at("2026-10-19T00:00:00.000Z"), null), false, "policy off: never");
 });
 

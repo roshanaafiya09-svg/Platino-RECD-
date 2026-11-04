@@ -48,6 +48,11 @@ export const REMINDER_EVENT = {
   ESCALATED: "escalated",
   ESCALATION_NO_RECIPIENT: "escalation_no_recipient",
   DUE_DATE_CHANGED: "due_date_changed",
+  /** Daily overdue reminders: the same outcomes as above, recorded per overdue day (detail.day) so a retry or a second run never repeats a delivery. */
+  REPEAT_SENT: "repeat_sent",
+  REPEAT_IN_APP_RECORDED: "repeat_in_app_recorded",
+  REPEAT_DELIVERY_FAILED: "repeat_delivery_failed",
+  REPEAT_NO_RECIPIENT: "repeat_no_recipient",
   CLOSED: "closed",
 } as const;
 
@@ -157,10 +162,11 @@ export const REMINDER_POLICY_DEFAULTS = { reminderLeadDays: null, reminderEscala
 /**
  * The PROPOSED reminder workflow, for mentor review. It is a suggestion shown in Settings, never a default: nothing is switched on
  * until an authorised person saves these values in the environment concerned (the stored policy stays empty = off).
- *   Stage 1  first reminder  : 3 calendar days before the due date -> the region's active Service Managers
+ *   Stage 1  first reminder  : 2 calendar days before the due date -> the region's active Service Managers, then one reminder every
+ *                              overdue day (UTC) until the activity is finished / archived or the reminder is acknowledged
  *   Stage 2  escalation 1    : unacknowledged 24 h after the reminder was DELIVERED -> the region's Regional Managers
  *   Stage 3  escalation 2    : unacknowledged 24 h after escalation 1 was DELIVERED -> Management and Owner/Admin
  * (24 h per stage is the single `reminderEscalationHours` value.) Both clocks start at a successful delivery, never at the
  * activity's creation or due date.
  */
-export const PROPOSED_REMINDER_POLICY = { reminderLeadDays: 3, reminderEscalationHours: 24 } as const;
+export const PROPOSED_REMINDER_POLICY = { reminderLeadDays: 2, reminderEscalationHours: 24 } as const;

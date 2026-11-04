@@ -29,6 +29,16 @@
  * (`escalationLevel`) only once that level was delivered to all its recipients (or had nobody to tell); until then the level is
  * retried on later runs, up to MAX_DELIVERY_ATTEMPTS, under a lease (`escalationClaimedAt`) that overlapping runs respect.
  *
+ * DAILY OVERDUE REMINDERS: once the due date has passed (a whole calendar day, UTC) a reminder that was delivered and is still
+ * unacknowledged is sent again to the same first-line recipients, once per UTC day, until the activity is finished / archived /
+ * has no due date (housekeeping closes the reminder) or somebody acknowledges it. The once-per-day guarantee is a conditional
+ * update of `lastAttemptAt` (claimed only if it is before today 00:00 UTC), so two runs - or a retry - cannot send the same day
+ * twice; each delivery is recorded per recipient with `repeat_*` events carrying `detail.day`. A recipient who already got today's
+ * message is skipped on a same-day retry, and one who failed MAX_DELIVERY_ATTEMPTS times today is left until tomorrow. Escalation
+ * clocks are untouched: `sentAt` (the first delivery) and `lastEscalatedAt` still drive them. A reminder whose FIRST delivery failed
+ * (or had no recipient) and has used up its MAX_DELIVERY_ATTEMPTS keeps its status and attempt count (the existing retry rules are
+ * unchanged) but still gets the daily overdue reminder through the same repeat path, so an overdue activity is never silent.
+ *
  * SAFE TO RUN TWICE / AT THE SAME TIME: reminders are unique per activity; sending is claimed with a conditional update on
  * `status`; an escalation attempt is claimed with a conditional update on `escalationLevel` + the lease; a recipient that already
  * received a level is skipped on retry. A failed delivery is retried on the next run.
@@ -46,6 +56,7 @@ import {
   classifyDue,
   escalationDue,
   ESCALATABLE_REMINDER_STATUSES,
+  UNDELIVERED_REMINDER_STATUSES,
   reminderEligible,
   type DueState,
 } from "@recd/shared";
@@ -169,6 +180,12 @@ export interface ReminderJobResult {
   escalationNoRecipient: number;
   /** Escalation levels whose delivery did not complete this run; they stay due and are retried. */
   escalationRetryPending: number;
+  /** Daily overdue reminders delivered to everyone this run. */
+  repeated: number;
+  /** Daily overdue reminders with no active recipient today (retried by a later run the same day). */
+  repeatNoRecipient: number;
+  /** Daily overdue reminders not delivered to everyone; the others are retried by a later run the same day. */
+  repeatRetryPending: number;
 }
 
 function messageData(r: { id: string; activityType: string; activityRef: string; customerName: string; siteName: string | null; unitSerialNo: string | null; dueDate: Date }, now: Date, extra: Record<string, unknown> = {}) {
@@ -199,16 +216,26 @@ async function deliver(
   templateKey: string,
   data: Record<string, unknown>,
   attempt: number,
-): Promise<{ delivered: Set<string>; pending: string[] }> {
+  /** Set for a daily overdue reminder: events are the `repeat_*` kind and are scoped to this UTC day (YYYY-MM-DD). */
+  repeatDay?: string,
+): Promise<{ delivered: Set<string>; pending: string[]; retryable: string[] }> {
+  const T = repeatDay
+    ? { sent: REMINDER_EVENT.REPEAT_SENT, recorded: REMINDER_EVENT.REPEAT_IN_APP_RECORDED, failed: REMINDER_EVENT.REPEAT_DELIVERY_FAILED }
+    : { sent: REMINDER_EVENT.SENT, recorded: REMINDER_EVENT.IN_APP_RECORDED, failed: REMINDER_EVENT.DELIVERY_FAILED };
+  const dayDetail = repeatDay ? { day: repeatDay } : {};
   const prior = await prisma.serviceReminderEvent.findMany({
-    where: { reminderId, level, type: { in: [REMINDER_EVENT.SENT, REMINDER_EVENT.IN_APP_RECORDED] } },
+    where: { reminderId, level, type: { in: repeatDay ? [T.sent, T.recorded, T.failed] : [T.sent, T.recorded] }, ...(repeatDay ? { detail: { path: ["day"], equals: repeatDay } } : {}) },
     select: { recipientId: true, type: true },
   });
-  const delivered = new Set(prior.filter((e) => e.type === REMINDER_EVENT.SENT).map((e) => e.recipientId as string));
-  const recorded = new Set(prior.filter((e) => e.type === REMINDER_EVENT.IN_APP_RECORDED).map((e) => e.recipientId as string));
+  const delivered = new Set(prior.filter((e) => e.type === T.sent).map((e) => e.recipientId as string));
+  const recorded = new Set(prior.filter((e) => e.type === T.recorded).map((e) => e.recipientId as string));
+  // A recipient that failed MAX_DELIVERY_ATTEMPTS times today (daily reminders only) is left until tomorrow.
+  const failuresToday = new Map<string, number>();
+  if (repeatDay) for (const e of prior) if (e.type === T.failed && e.recipientId) failuresToday.set(e.recipientId, (failuresToday.get(e.recipientId) ?? 0) + 1);
 
   for (const recipientId of recipientIds) {
     if (delivered.has(recipientId)) continue;
+    if (repeatDay && (failuresToday.get(recipientId) ?? 0) >= MAX_DELIVERY_ATTEMPTS) continue;
     const channels = ["email", ...(recorded.has(recipientId) ? [] : ["in_app"])] as ("email" | "in_app")[];
     try {
       const logs = await sendNotification({ recipientId, templateKey, data, channels });
@@ -216,20 +243,29 @@ async function deliver(
         const ok = log.status === "sent";
         if (log.channel === "email") {
           if (ok) delivered.add(recipientId);
-          await prisma.serviceReminderEvent.create({ data: { reminderId, type: ok ? REMINDER_EVENT.SENT : REMINDER_EVENT.DELIVERY_FAILED, level, recipientId, channel: "email", detail: { logStatus: log.status, attempt } } });
+          await prisma.serviceReminderEvent.create({ data: { reminderId, type: ok ? T.sent : T.failed, level, recipientId, channel: "email", detail: { logStatus: log.status, attempt, ...dayDetail } } });
         } else {
-          await prisma.serviceReminderEvent.create({ data: { reminderId, type: ok ? REMINDER_EVENT.IN_APP_RECORDED : REMINDER_EVENT.DELIVERY_FAILED, level, recipientId, channel: log.channel, detail: { logStatus: log.status, attempt, ...(ok ? { note: "recorded only - no inbox shows it, so it is not a delivery" } : {}) } } });
+          await prisma.serviceReminderEvent.create({ data: { reminderId, type: ok ? T.recorded : T.failed, level, recipientId, channel: log.channel, detail: { logStatus: log.status, attempt, ...dayDetail, ...(ok ? { note: "recorded only - no inbox shows it, so it is not a delivery" } : {}) } } });
         }
       }
     } catch (err) {
-      await prisma.serviceReminderEvent.create({ data: { reminderId, type: REMINDER_EVENT.DELIVERY_FAILED, level, recipientId, channel: null, detail: { error: err instanceof Error ? err.name : "unknown", attempt } } });
+      await prisma.serviceReminderEvent.create({ data: { reminderId, type: T.failed, level, recipientId, channel: null, detail: { error: err instanceof Error ? err.name : "unknown", attempt, ...dayDetail } } });
     }
   }
-  return { delivered, pending: recipientIds.filter((id) => !delivered.has(id)) };
+  const pending = recipientIds.filter((id) => !delivered.has(id));
+  // Who a later run may still try: for daily reminders, not those that already failed MAX_DELIVERY_ATTEMPTS times today (recounted from the events).
+  let retryable = pending;
+  if (repeatDay && pending.length) {
+    const failed = await prisma.serviceReminderEvent.findMany({ where: { reminderId, level, type: T.failed, recipientId: { in: pending }, detail: { path: ["day"], equals: repeatDay } }, select: { recipientId: true } });
+    const counts = new Map<string, number>();
+    for (const e of failed) counts.set(e.recipientId as string, (counts.get(e.recipientId as string) ?? 0) + 1);
+    retryable = pending.filter((id) => (counts.get(id) ?? 0) < MAX_DELIVERY_ATTEMPTS);
+  }
+  return { delivered, pending, retryable };
 }
 
 export async function runReminderJob(now: Date = new Date()): Promise<ReminderJobResult> {
-  const result: ReminderJobResult = { enabled: false, closed: 0, created: 0, sent: 0, failed: 0, noRecipient: 0, escalated: 0, escalationNoRecipient: 0, escalationRetryPending: 0 };
+  const result: ReminderJobResult = { enabled: false, closed: 0, created: 0, sent: 0, failed: 0, noRecipient: 0, escalated: 0, escalationNoRecipient: 0, escalationRetryPending: 0, repeated: 0, repeatNoRecipient: 0, repeatRetryPending: 0 };
   const settings = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
   const leadDays = settings?.reminderLeadDays ?? null;
   const escalationHours = settings?.reminderEscalationHours ?? null;
@@ -293,6 +329,8 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
     }
   }
 
+  const todayStart = new Date(`${dateOnly(now)}T00:00:00.000Z`);
+
   // 3. Send: pending, previously failed, previously without a recipient, or stuck "sending" past the timeout.
   const stale = new Date(now.getTime() - SENDING_STALE_MINUTES * 60_000);
   const toSend = await prisma.serviceReminder.findMany({
@@ -325,6 +363,42 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
       const reachedSome = out.pending.length < recipients.ids.length;
       await prisma.serviceReminder.update({ where: { id }, data: { status: REMINDER_STATUS.FAILED, statusReason: reachedSome ? "partial_delivery" : "delivery_failed" } });
       result.failed++;
+    }
+  }
+
+  // 3b. Daily overdue reminders: a DELIVERED (or undelivered with its first-delivery attempts used up), unacknowledged reminder whose activity is still open and past its due date is sent again
+  //     once per UTC day. The claim (lastAttemptAt before today 00:00 UTC -> now) is atomic, so overlapping runs cannot both send.
+  const overdueSent = await prisma.serviceReminder.findMany({
+    where: { OR: [{ status: REMINDER_STATUS.SENT }, { status: { in: UNDELIVERED_REMINDER_STATUSES }, attempts: { gte: MAX_DELIVERY_ATTEMPTS } }], acknowledgedAt: null, closedAt: null, lastAttemptAt: { lt: todayStart } },
+    include: { complaint: { select: { status: true, dueDate: true, archivedAt: true } }, amcVisit: { select: { status: true, dueDate: true } } },
+  });
+  for (const r of overdueSent) {
+    // The live activity decides: its CURRENT due date (it may have been moved) and that it is still open.
+    const live = r.complaint
+      ? TICKET_FINISHED_STATUSES.includes(r.complaint.status) || r.complaint.archivedAt ? null : r.complaint.dueDate
+      : r.amcVisit && r.amcVisit.status === AMC_VISIT_STATUS.SCHEDULED ? r.amcVisit.dueDate : null;
+    if (!live || classifyDue(live, now, null) !== "overdue") continue;
+    const claimed = await prisma.serviceReminder.updateMany({
+      where: { id: r.id, status: r.status, attempts: r.attempts, acknowledgedAt: null, closedAt: null, lastAttemptAt: { lt: todayStart } },
+      data: { lastAttemptAt: now },
+    });
+    if (claimed.count !== 1) continue; // another run already sent today's reminder
+    const release = () => prisma.serviceReminder.updateMany({ where: { id: r.id, lastAttemptAt: now }, data: { lastAttemptAt: r.lastAttemptAt } });
+    const day = dateOnly(now);
+    const daysOverdue = Math.floor((now.getTime() - live.getTime()) / DAY_MS);
+    const recipients = await firstLineRecipients(r.regionId);
+    if (!recipients.ids.length) {
+      const already = await prisma.serviceReminderEvent.count({ where: { reminderId: r.id, type: REMINDER_EVENT.REPEAT_NO_RECIPIENT, detail: { path: ["day"], equals: day } } });
+      if (!already) await prisma.serviceReminderEvent.create({ data: { reminderId: r.id, type: REMINDER_EVENT.REPEAT_NO_RECIPIENT, detail: { reason: recipients.reason, day } } });
+      await release(); // nobody today: a later run the same day may find a manager
+      result.repeatNoRecipient++;
+      continue;
+    }
+    const out = await deliver(r.id, 0, recipients.ids, "service_reminder", messageData({ ...r, dueDate: live }, now, { daysOverdue, repeat: true }), 1, day);
+    if (out.pending.length === 0) result.repeated++;
+    else {
+      if (out.retryable.length) await release(); // the rest is retried by a later run today (those already delivered are skipped)
+      result.repeatRetryPending++;
     }
   }
 

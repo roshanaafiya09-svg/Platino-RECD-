@@ -1315,9 +1315,9 @@ test("approved policy: the reminders-off state and the validated, configurable p
   const { PROPOSED_REMINDER_POLICY } = await import("@recd/shared");
   const saved = await call("mgmt", "PUT", "/settings/reminders", PROPOSED_REMINDER_POLICY);
   assert.equal(saved.status, 200);
-  assert.deepEqual([settings.reminderLeadDays, settings.reminderEscalationHours], [3, 24], "the proposed values are accepted through the existing endpoint");
+  assert.deepEqual([settings.reminderLeadDays, settings.reminderEscalationHours], [2, 24], "the proposed values are accepted through the existing endpoint");
   dash = await call("smR1", "GET", "/reminders");
-  assert.deepEqual([dash.body.policy.remindersEnabled, dash.body.policy.reminderLeadDays, dash.body.policy.reminderEscalationHours], [true, 3, 24]);
+  assert.deepEqual([dash.body.policy.remindersEnabled, dash.body.policy.reminderLeadDays, dash.body.policy.reminderEscalationHours], [true, 2, 24]);
   assert.equal((await call("mgmt", "PUT", "/settings/reminders", { reminderLeadDays: null, reminderEscalationHours: 24 })).status, 400, "escalation still needs a lead time");
   for (const who of ["smR1", "rm1", "eng", "custA"]) assert.equal((await call(who, "PUT", "/settings/reminders", PROPOSED_REMINDER_POLICY)).status, 403, who);
 });

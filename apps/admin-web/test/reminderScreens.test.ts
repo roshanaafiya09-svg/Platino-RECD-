@@ -172,7 +172,7 @@ test("friendly errors: a network failure or a server error becomes one clear sen
   assert.match(dash, /Unable to load reminders\. Please try again\./);
 });
 
-test("settings: the proposed workflow (3 days, 24 h per stage) is shown for review and only FILLS the boxes - saving stays a separate, deliberate step", () => {
+test("settings: the proposed workflow (2 days, 24 h per stage) is shown for review and only FILLS the boxes - saving stays a separate, deliberate step", () => {
   assert.match(settingsComp, /data-testid="reminder-proposed-policy"/);
   assert.match(settingsComp, /Proposed workflow \(for mentor review - not active\)/);
   assert.match(settingsComp, /PROPOSED_REMINDER_POLICY\.reminderLeadDays/);

@@ -46,3 +46,15 @@ test("generic fallback: still renders unknown templates, with keys and values es
   assert.ok(m.html.includes(ESCAPED));
   assert.ok(m.html.includes("&lt;b&gt;k&lt;/b&gt;"));
 });
+
+test("service_reminder: a daily overdue reminder says it is overdue and for how many days; a first reminder has no such line", () => {
+  const base = { activityType: "ticket", activityRef: "TCK-1", customerName: "Acme", siteName: "Plant", serialNo: "SN1", dueDate: "2031-06-10" };
+  const daily = renderEmail("service_reminder", { ...base, overdue: true, daysOverdue: 3, repeat: true });
+  assert.match(daily.text, /Overdue: Service ticket TCK-1/);
+  assert.match(daily.text, /Due date: 2031-06-10 \(OVERDUE\)/);
+  assert.match(daily.text, /Days overdue: 3/);
+  assert.ok(daily.html.includes("Days overdue: 3"));
+  const first = renderEmail("service_reminder", { ...base, overdue: false });
+  assert.match(first.text, /Due soon: Service ticket TCK-1/);
+  assert.ok(!first.text.includes("Days overdue"));
+});

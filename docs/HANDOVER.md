@@ -1048,7 +1048,7 @@ Mocked: `apps/api/test/reminders.test.ts` (41). Real database: `apps/api/test/db
 - **Still open (mentor):** PO uniqueness scope and whether duplicates should be rejected or only flagged; whether the assistant may ever create approved duplicates; whether PO should appear on the customer portal / exports (not changed); order editing (not added).
 
 
-## 35. Requirement 6 - proposed reminder workflow (3 days, then 24 h per stage) - FOR MENTOR REVIEW (2026-10-21, branch `feature/my-service-improvements`)
+## 35. Requirement 6 - proposed reminder workflow (2 days, then 24 h per stage; was 3 days until the project owner changed it) - FOR MENTOR REVIEW (2026-10-21, branch `feature/my-service-improvements`)
 
 **Status: the workflow is implemented by the existing reminder engine and covered by mocked and isolated-database tests. NOT tried in a browser for the new Settings panel. The live policy stays EMPTY (= reminders OFF) in every environment until an authorised person saves the values there.** No new migration beyond `20261020090000_reminder_escalation_retry` (section 33 follow-up: escalation attempts + lease).
 
@@ -1056,7 +1056,7 @@ Mocked: `apps/api/test/reminders.test.ts` (41). Real database: `apps/api/test/db
 
 | Stage | When | Who |
 |---|---|---|
-| 1 First reminder | from 3 calendar days before the due date (`reminderLeadDays = 3`), and for everything overdue; only activities with an explicit due date that are not finished | the region's ACTIVE Service Managers; if none, the region's active Regional Managers; if neither (or no region): "no recipient" (shown on the dashboard, retried every run, sent to nobody unrelated) |
+| 1 First reminder | from 2 calendar days before the due date (`reminderLeadDays = 2`), and for everything overdue; only activities with an explicit due date that are not finished | the region's ACTIVE Service Managers; if none, the region's active Regional Managers; if neither (or no region): "no recipient" (shown on the dashboard, retried every run, sent to nobody unrelated) |
 | 2 Regional escalation | unacknowledged 24 h (`reminderEscalationHours = 24`) after the reminder was DELIVERED to every recipient | the region's active Regional Managers who did not already have the reminder; if none, Management |
 | 3 Management escalation | unacknowledged another 24 h after stage 2 was DELIVERED | Management and Owner/Admin |
 
@@ -1301,7 +1301,7 @@ Source of the requirements: `New Service Web.docx` ("FIELD SENSE / SERVICE MODUL
 | Value | Source | Status |
 |---|---|---|
 | SLA escalation 24 h (Regional) / 48 h (Management), editable in Settings | not in the 11 items; project owner instruction: "Preserve those defaults" | preserved; business-confirmed only by that instruction |
-| R6 reminders: 3-day lead, 24 h per escalation stage | project owner instruction: "The intended values are: Lead time 3 days, escalation interval 24 hours per stage" | configurable; the live policy is EMPTY (= off) until a Super Admin saves it in Settings -> Service reminders |
+| R6 reminders: 2-day lead (changed from 3 on the project owner's instruction), 24 h per escalation stage | project owner instruction: "The intended values are: Lead time 3 days, escalation interval 24 hours per stage" | configurable; the live policy is EMPTY (= off) until a Super Admin saves it in Settings -> Service reminders |
 | Warranty reminders 30 days before expiry, repeated every 3 days | copied from the AMC behaviour; never separately approved | UNCONFIRMED default (Settings -> Warranty overrides it) |
 | AMC reminders 30 days before expiry, repeated every 3 days, 12-month default duration | original live behaviour (section 22: "1 month before, every 3 days") | carried over; not re-approved |
 

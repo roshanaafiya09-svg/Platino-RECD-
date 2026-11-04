@@ -41,7 +41,7 @@ const STATE_LABEL: Record<Row["state"], string> = { no_due_date: "No due date", 
 const STATE_PILL: Record<Row["state"], string> = { no_due_date: "status-pill", pending: "status-pill", due_soon: "status-pill status-pill-warning", overdue: "status-pill status-pill-error" };
 
 const EVENT_TEXT: Record<string, string> = {
-  created: "Reminder created", sent: "E-mail delivered", in_app_recorded: "In-app record written (not a delivery)", delivery_failed: "Delivery failed", no_recipient: "No recipient found", acknowledged: "Acknowledged",
+  created: "Reminder created", sent: "E-mail delivered", in_app_recorded: "In-app record written (not a delivery)", delivery_failed: "Delivery failed", no_recipient: "No recipient found", repeat_sent: "Daily overdue reminder delivered", repeat_in_app_recorded: "Daily reminder: in-app record written (not a delivery)", repeat_delivery_failed: "Daily overdue reminder failed", repeat_no_recipient: "Daily overdue reminder: no recipient today", acknowledged: "Acknowledged",
   escalated: "Escalated", escalation_no_recipient: "Escalation: nobody to send to", due_date_changed: "Due date changed", closed: "Closed (activity finished)",
 };
 
