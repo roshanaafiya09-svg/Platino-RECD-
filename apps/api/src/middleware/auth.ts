@@ -26,6 +26,34 @@ export const authenticate = (req: AuthenticatedRequest, res: Response, next: Nex
 export const authenticateAllowingPasswordChange = (req: AuthenticatedRequest, res: Response, next: NextFunction) =>
   runAuthenticate(req, res, next, true);
 
+export interface AuthUserRow {
+  id: string;
+  isActive: boolean;
+  tokenVersion: number | null;
+  mustChangePassword: boolean;
+  customerId: string | null;
+  vendorId: string | null;
+  roleKey: string;
+  permissions: string[];
+}
+
+/** The current account with its role key and permission keys, or null when there is no such user. One statement. */
+export async function loadAuthUser(userId: string): Promise<AuthUserRow | null> {
+  const rows = await prisma.$queryRaw<AuthUserRow[]>`
+    SELECT u."id", u."isActive", u."tokenVersion", u."mustChangePassword", u."customerId", u."vendorId", r."key" AS "roleKey",
+           COALESCE(array_agg(p."key") FILTER (WHERE p."key" IS NOT NULL), ARRAY[]::text[]) AS "permissions"
+    FROM "User" u
+    JOIN "Role" r ON r."id" = u."roleId"
+    LEFT JOIN "RolePermission" rp ON rp."roleId" = r."id"
+    LEFT JOIN "Permission" p ON p."id" = rp."permissionId"
+    WHERE u."id" = ${userId}
+    GROUP BY u."id", r."key"`;
+  return rows[0] ?? null;
+}
+
+/** Where `authenticate` gets the account from. Always the single-statement lookup above; unit tests that have no database swap it (see test/helpers/authLookupFromUserModel.ts). */
+export const authLookup: { load: (userId: string) => Promise<AuthUserRow | null> } = { load: loadAuthUser };
+
 async function runAuthenticate(req: AuthenticatedRequest, res: Response, next: NextFunction, allowPasswordChangePending: boolean) {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) {
@@ -36,10 +64,10 @@ async function runAuthenticate(req: AuthenticatedRequest, res: Response, next: N
     // Load the user (not just the role) so we can (a) reject deactivated accounts whose
     // tokens are still valid, and (b) reflect role/permission changes immediately rather
     // than trusting the role baked into the token at sign-in time.
-    const user = await prisma.user.findUnique({
-      where: { id: payload.userId },
-      include: { role: { include: { permissions: { include: { permission: true } } } } },
-    });
+    // ONE database round trip for the user, the role and every permission key. The usual typed lookup (user -> role -> role permissions
+    // -> permissions) is sent as one query per level, in sequence, before the real handler even starts. Only the columns used below are
+    // read; the checks that follow are unchanged. This is a hand-written query for this one place only: no other query is affected.
+    const user = await authLookup.load(payload.userId);
     if (!user) return res.status(401).json({ error: "Unknown user" });
     if (!user.isActive) return res.status(401).json({ error: "Account is inactive" });
     // Revocation: a password reset / change, deactivation or reactivation, a role change or a customer / vendor link change bumps
@@ -52,10 +80,10 @@ async function runAuthenticate(req: AuthenticatedRequest, res: Response, next: N
 
     req.auth = {
       userId: user.id,
-      roleKey: user.role.key,
+      roleKey: user.roleKey,
       customerId: user.customerId,
       vendorId: user.vendorId,
-      permissions: new Set(user.role.permissions.map((rp) => rp.permission.key)),
+      permissions: new Set(user.permissions),
     };
     next();
   } catch {

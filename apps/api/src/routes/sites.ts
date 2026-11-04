@@ -28,6 +28,7 @@ import { isSerialConflict, SERIAL_RACE_MESSAGE } from "../lib/uniqueViolations";
 import { OrderCreationError, resolveDuplicatePo, withOrderNumber } from "../lib/orderCreation";
 import { createDriveFolder, getDriveFolderId } from "../lib/googleDrive";
 import { managedRegionIds } from "../lib/regions";
+import { parsePaging } from "../lib/paging";
 import { SITE_ORDER_WITH_REFS_SELECT, SITE_PEOPLE_INCLUDE, STAFF_REF_SELECT, VENDOR_REF_SELECT } from "../lib/safeSelect";
 
 export const sitesRouter = Router();
@@ -48,6 +49,9 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
   // A Regional Manager only sees sites in the regions mapped to them (the same rule the ticket module already applies); none mapped = nothing.
   if (isRegionScoped(req.auth!)) where.regionId = { in: await managedRegionIds(req.auth!.userId, req.auth!.roleKey) };
 
+  // Without ?limit= this is every visible site, exactly as before. With it, one page (id breaks updatedAt ties so pages never overlap) and the total in X-Total-Count.
+  const paging = parsePaging(req.query);
+  if (paging) res.setHeader("X-Total-Count", String(await prisma.site.count({ where })));
   const sites = await prisma.site.findMany({
     where,
     include: {
@@ -57,7 +61,8 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
       // The serial(s) printed on this site's RECD(s), for list screens (mobile). Same rows the by-id endpoint returns, narrowed to what a list shows.
       units: { select: { id: true, serialNo: true, status: true }, orderBy: { createdAt: "asc" } },
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: paging ? [{ updatedAt: "desc" }, { id: "asc" }] : { updatedAt: "desc" },
+    ...(paging ?? {}),
   });
   res.json(sites);
 });

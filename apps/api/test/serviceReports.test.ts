@@ -18,6 +18,7 @@ import { PERMISSION_KEY as P, ROLE_KEY, SERVICE_REPORT_LIMITS } from "@recd/shar
 import { matchesCondition } from "./helpers/fakeOtpStore";
 import { makePng, pngDataUrl } from "./helpers/png";
 import { setReportStorageForTests, sha256Hex, type ReportStorage } from "../src/lib/reportStorage";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -134,6 +135,7 @@ before(async () => {
   console.error = () => {};
   console.log = () => {};
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   const { signToken } = await import("../src/lib/jwt");
   const { serviceReportsRouter } = await import("../src/routes/serviceReports");
   const { complaintsRouter } = await import("../src/routes/complaints");
@@ -720,6 +722,7 @@ test("a ticket that has service reports cannot be archived; one without is archi
   reset();
   await createDraft();
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   (prisma as any).$transaction = async (fn: any) => fn(prisma);
   let archived = false;
   const complaintStub = { findUnique: ({ where }: any) => (tickets[where.id] ? { ...tickets[where.id], archivedAt: null } : null), updateMany: () => { archived = true; return { count: 1 }; }, delete: () => { throw new Error("must not be called"); } };

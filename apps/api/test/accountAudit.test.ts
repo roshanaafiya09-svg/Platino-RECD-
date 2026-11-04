@@ -13,6 +13,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const P = PERMISSION_KEY;
@@ -39,6 +40,7 @@ const keyOfRole = (id: string) => id.replace(/^role-/, "");
 
 before(async () => {
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   const { signToken } = await import("../src/lib/jwt");
   const { customersRouter } = await import("../src/routes/customers");
   const { vendorsRouter } = await import("../src/routes/vendors");

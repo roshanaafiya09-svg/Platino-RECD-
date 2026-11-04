@@ -28,11 +28,19 @@ dashboardRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_DASHBOARD), async
   const siteWhere = regionIds ? { regionId: { in: regionIds } } : {};
   const complaintWhere = { archivedAt: null, ...(regionIds ? { site: { regionId: { in: regionIds } } } : {}) };
 
-  const sites = await prisma.site.findMany({ where: siteWhere, include: { currentStage: true } });
+  // Counted by the database (one row per stage) instead of loading every site with its stage just to add them up in memory.
+  const [stageCounts, stages, grouped] = await Promise.all([
+    prisma.site.groupBy({ by: ["currentStageId"], where: siteWhere, _count: { _all: true } }),
+    prisma.stageDefinition.findMany({ select: { id: true, phase: true } }),
+    prisma.complaint.groupBy({ by: ["status"], where: complaintWhere, _count: { _all: true } }),
+  ]);
+  const phaseOfStage = new Map(stages.map((st) => [st.id, st.phase]));
   const sitesByPhase: Record<string, number> = Object.fromEntries(Object.values(SITC_PHASE).map((p) => [p, 0]));
-  for (const site of sites) sitesByPhase[site.currentStage.phase] += 1;
+  for (const row of stageCounts) {
+    const phase = phaseOfStage.get(row.currentStageId);
+    if (phase !== undefined) sitesByPhase[phase] = (sitesByPhase[phase] ?? 0) + row._count._all;
+  }
 
-  const grouped = await prisma.complaint.groupBy({ by: ["status"], where: complaintWhere, _count: { _all: true } });
   const complaintsByStatus: Record<string, number> = Object.fromEntries(
     Object.values(COMPLAINT_STATUS).map((s) => [s, 0]),
   );

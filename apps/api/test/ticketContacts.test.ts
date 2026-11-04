@@ -12,6 +12,7 @@ import type { Server } from "node:http";
 import express from "express";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
 import { buildTicketContactInfo, contactAudience } from "../src/lib/ticketContacts";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -139,6 +140,7 @@ let tokenFor: (u: string) => string;
 
 before(async () => {
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   const { signToken } = await import("../src/lib/jwt");
   const { complaintsRouter } = await import("../src/routes/complaints");
   for (const model of ["user", "complaint", "regionManager"]) {

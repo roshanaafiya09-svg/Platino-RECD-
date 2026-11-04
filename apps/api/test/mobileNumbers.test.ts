@@ -27,6 +27,7 @@ import { hashLoginOtp } from "../src/lib/loginOtp";
 import { createFakeOtpStore } from "./helpers/fakeOtpStore";
 import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
 import { installFakeTransactions } from "./helpers/fakeTransactions";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -63,6 +64,7 @@ before(async () => {
   console.log = () => {}; // the routes log OTP details; keep them (and the synthetic numbers) out of test output
   console.error = () => {};
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   createFakeRateLimitStore().install(prisma); // the IP limiter keeps its counters in the database; here they live in memory
   const { signToken } = await import("../src/lib/jwt");
   const { customersRouter } = await import("../src/routes/customers");

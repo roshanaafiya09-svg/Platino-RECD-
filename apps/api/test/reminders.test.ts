@@ -18,6 +18,7 @@ import express from "express";
 import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY as P, ROLE_KEY } from "@recd/shared";
 import { deepMatch } from "./helpers/deepMatch";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -193,6 +194,7 @@ before(async () => {
   console.error = () => {};
   console.log = () => {};
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   const { signToken } = await import("../src/lib/jwt");
   const { remindersRouter, reminderCronRouter } = await import("../src/routes/reminders");
   const { regionsRouter } = await import("../src/routes/regions");

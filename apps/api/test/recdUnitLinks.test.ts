@@ -14,6 +14,7 @@ import express from "express";
 import { Prisma } from "@prisma/client";
 import { ROLE_KEY, PERMISSION_KEY, RECD_UNIT_STATUS } from "@recd/shared";
 import { shape } from "./helpers/prismaShape";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -75,6 +76,7 @@ let tokenFor: (u: string) => string;
 
 before(async () => {
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   const { signToken } = await import("../src/lib/jwt");
   const { recdUnitsRouter } = await import("../src/routes/recdUnits");
   const { amcOrdersRouter } = await import("../src/routes/amcOrders");

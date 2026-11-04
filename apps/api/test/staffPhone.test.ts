@@ -12,6 +12,7 @@ import type { Server } from "node:http";
 import express from "express";
 import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const p2002 = (modelName: string, target: string[]) =>
@@ -36,6 +37,7 @@ const seed = (id: string, phone: string | null, roleKey: string = ROLE_KEY.SALES
 
 before(async () => {
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   const { signToken } = await import("../src/lib/jwt");
   const { usersRouter } = await import("../src/routes/users");
   const define = (model: string, impl: Record<string, (...a: any[]) => any>) => Object.defineProperty(prisma, model, { configurable: true, get: () => impl });

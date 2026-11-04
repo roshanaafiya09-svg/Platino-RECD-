@@ -13,6 +13,7 @@ import type { Server } from "node:http";
 import express from "express";
 import { Prisma } from "@prisma/client";
 import { ROLE_KEY, PERMISSION_KEY } from "@recd/shared";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const P = PERMISSION_KEY;
@@ -100,6 +101,7 @@ let tokenFor: (u: string) => string;
 
 before(async () => {
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   const { signToken } = await import("../src/lib/jwt");
   const { ordersRouter } = await import("../src/routes/orders");
   const { sitesRouter } = await import("../src/routes/sites");
@@ -280,6 +282,7 @@ test("control: without the lock the same race DOES create two unflagged orders (
 async function agentPropose(input: Record<string, unknown>, roleKey: string = ROLE_KEY.MANAGEMENT) {
   const { appWriteTools } = await import("../src/agent/tools/appWriteTools");
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   const created: any[] = [];
   Object.defineProperty(prisma, "agentPendingAction", { configurable: true, get: () => ({ create: async ({ data }: any) => { created.push(data); return { id: "act1", ...data }; } }) });
   const tool = appWriteTools.find((t) => t.name === "create_order")!;

@@ -16,6 +16,7 @@ import type { Server } from "node:http";
 import express from "express";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
 import { allKeys, shape } from "./helpers/prismaShape";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const P = PERMISSION_KEY;
@@ -95,6 +96,7 @@ function siteMatches(site: any, where: any = {}): boolean {
 
 before(async () => {
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   const { signToken } = await import("../src/lib/jwt");
   const { sitesRouter } = await import("../src/routes/sites");
   const { ordersRouter } = await import("../src/routes/orders");

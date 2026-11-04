@@ -98,3 +98,10 @@ test("the API's code and the apps' code are the same string", () => {
   const mw = read("apps/api/src/middleware/auth.ts");
   assert.match(mw, /export const PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED"/);
 });
+
+test("web session loader: the screen is released after /auth/me - the settings refresh runs in the background and cannot block or break sign-in", () => {
+  const ctx = read("apps/admin-web/src/components/AuthContext.tsx");
+  assert.match(ctx, /void api<\{ themeKey[^)]*\("\/settings"\)\s*\.then/, "settings are not awaited");
+  assert.doesNotMatch(ctx, /await api<\{ themeKey/, "nothing waits for the settings call");
+  assert.match(ctx, /\.catch\(\(err\) => \{\s*console\.error\("Failed to load settings in AuthContext", err\);/, "a settings failure is logged, never thrown into the session load");
+});

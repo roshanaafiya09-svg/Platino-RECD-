@@ -3,6 +3,7 @@ import { createCustomerSchema, updateCustomerSchema, normalizeIndianMobile, PERM
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
+import { parsePaging } from "../lib/paging";
 import { phoneHeldByAnother } from "../lib/userPhone";
 import { isUserEmailConflict, isUserPhoneConflict } from "../lib/uniqueViolations";
 import { SITE_PEOPLE_INCLUDE } from "../lib/safeSelect";
@@ -14,10 +15,14 @@ const EMAIL_IN_USE = "A contact with that email address already exists";
 export const customersRouter = Router();
 customersRouter.use(authenticate);
 
-customersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (_req, res) => {
+customersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req, res) => {
+  // Without ?limit= this is every customer, exactly as before. With it, one page (id breaks name ties so pages never overlap) and the total in X-Total-Count.
+  const paging = parsePaging(req.query);
+  if (paging) res.setHeader("X-Total-Count", String(await prisma.customer.count()));
   const customers = await prisma.customer.findMany({
     include: { contacts: { select: { id: true, name: true, phone: true, email: true }, orderBy: { createdAt: "asc" } } },
-    orderBy: { name: "asc" },
+    orderBy: paging ? [{ name: "asc" }, { id: "asc" }] : { name: "asc" },
+    ...(paging ?? {}),
   });
   res.json(customers);
 });

@@ -15,6 +15,7 @@ import type { Server } from "node:http";
 import express from "express";
 import bcrypt from "bcryptjs";
 import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const PASSWORD = "Temp-Passw0rd!";
@@ -34,6 +35,7 @@ const consoleWarn = console.warn;
 before(async () => {
   console.warn = () => undefined;
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   createFakeRateLimitStore().install(prisma);
   ({ signToken, verifyToken } = await import("../src/lib/jwt"));
   const { authenticate, requirePermission } = await import("../src/middleware/auth");

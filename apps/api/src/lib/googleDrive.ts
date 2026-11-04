@@ -1,4 +1,12 @@
-import { google } from "googleapis";
+import type { google as GoogleNamespace } from "googleapis";
+
+// googleapis is a very large package (about 0.85 s to load): it is loaded on first use, not when the server starts, so a cold start
+// that never touches Drive does not pay for it. getDriveClient() stays synchronous, so no caller changes.
+let googleApis: { google: typeof GoogleNamespace } | undefined;
+function loadGoogle(): typeof GoogleNamespace {
+  googleApis ??= require("googleapis") as { google: typeof GoogleNamespace };
+  return googleApis.google;
+}
 
 // Separate from lib/googleAuth.ts (which verifies end-user Google Sign-In ID tokens via
 // GOOGLE_CLIENT_ID). This client authenticates as a dedicated company Drive account using a
@@ -19,7 +27,7 @@ function requireEnv(name: string): string {
   return value;
 }
 
-let oauth2Client: InstanceType<typeof google.auth.OAuth2> | undefined;
+let oauth2Client: InstanceType<typeof GoogleNamespace.auth.OAuth2> | undefined;
 
 function getOAuth2Client() {
   if (oauth2Client) return oauth2Client;
@@ -28,7 +36,7 @@ function getOAuth2Client() {
   const clientSecret = requireEnv("GOOGLE_DRIVE_CLIENT_SECRET");
   const refreshToken = requireEnv("GOOGLE_DRIVE_REFRESH_TOKEN");
 
-  const client = new google.auth.OAuth2(clientId, clientSecret);
+  const client = new (loadGoogle().auth.OAuth2)(clientId, clientSecret);
   client.setCredentials({ refresh_token: refreshToken });
   oauth2Client = client;
   return client;
@@ -40,7 +48,7 @@ export function getDriveFolderId(): string {
 }
 
 export function getDriveClient() {
-  return google.drive({ version: "v3", auth: getOAuth2Client() });
+  return loadGoogle().drive({ version: "v3", auth: getOAuth2Client() });
 }
 
 /**

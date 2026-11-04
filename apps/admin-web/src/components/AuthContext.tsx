@@ -46,20 +46,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const data = await api<UserSession>("/auth/me");
-      
+
       const savedOrderNumber = typeof window !== "undefined" ? window.localStorage.getItem("recd_customer_ord") : null;
       if (data.role.key === "customer" && savedOrderNumber) {
         data.orderNumber = savedOrderNumber;
       }
-      
+
       setUser(data);
 
       // An account that must change its password may only reach /auth/me and the change-password call: do not fire the rest.
       if (data.mustChangePassword) return;
 
-      try {
-        const settings = await api<{ themeKey: string; logoDataUrl: string | null; customColors: any }>("/settings");
-        if (typeof window !== "undefined") {
+      // The theme and logo refresh runs in the background: the screen no longer waits for it (and for its logo image) before it
+      // appears. The last theme and logo are already in local storage from the previous visit (see ThemeInitializer), and
+      // "settings-changed" repaints once the fresh ones arrive.
+      void api<{ themeKey: string; logoDataUrl: string | null; customColors: any }>("/settings")
+        .then((settings) => {
+          if (typeof window === "undefined") return;
           const { saveThemeKey, saveLogo, clearLogo, saveCustomColors, clearCustomColors } = require("@/lib/settingsStore");
           if (settings.themeKey) {
             saveThemeKey(settings.themeKey);
@@ -75,10 +78,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             clearCustomColors();
           }
           window.dispatchEvent(new Event("settings-changed"));
-        }
-      } catch (err) {
-        console.error("Failed to load settings in AuthContext", err);
-      }
+        })
+        .catch((err) => {
+          console.error("Failed to load settings in AuthContext", err);
+        });
     } catch (err) {
       console.error("Session load failed", err);
       clearToken();

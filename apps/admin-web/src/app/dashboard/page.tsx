@@ -1,19 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bar, Doughnut } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  BarElement,
-  ArcElement,
-  CategoryScale,
-  LinearScale,
-  Tooltip,
-} from "chart.js";
+import dynamic from "next/dynamic";
 import { api } from "@/lib/apiClient";
 import type { DashboardCountsDTO } from "@recd/shared";
 
-ChartJS.register(BarElement, ArcElement, CategoryScale, LinearScale, Tooltip);
+// The chart library (about 60 kB of script) is fetched after the counts are on screen, not before them. The boxes that hold the
+// charts have a fixed height, so nothing moves when a chart appears.
+const PhaseBarChart = dynamic(() => import("./DashboardCharts").then((m) => m.PhaseBarChart), { ssr: false });
+const ComplaintDoughnut = dynamic(() => import("./DashboardCharts").then((m) => m.ComplaintDoughnut), { ssr: false });
 
 const PHASE_META: Record<string, { label: string; color: string; bg: string; icon: JSX.Element }> = {
   SUPPLY: {
@@ -116,27 +111,10 @@ export default function DashboardPage() {
             Sites by phase
           </h2>
           <div className="relative h-48">
-            <Bar
-              data={{
-                labels: phaseEntries.map(([phase]) => PHASE_META[phase]?.label ?? phase),
-                datasets: [
-                  {
-                    data: phaseEntries.map(([, count]) => count),
-                    backgroundColor: phaseEntries.map(([phase]) => PHASE_META[phase]?.color ?? "#0F4C81"),
-                    borderRadius: 6,
-                    maxBarThickness: 40,
-                  },
-                ],
-              }}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                  x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-                  y: { display: false, beginAtZero: true },
-                },
-              }}
+            <PhaseBarChart
+              labels={phaseEntries.map(([phase]) => PHASE_META[phase]?.label ?? phase)}
+              values={phaseEntries.map(([, count]) => count)}
+              colors={phaseEntries.map(([phase]) => PHASE_META[phase]?.color ?? "#0F4C81")}
             />
           </div>
         </div>
@@ -146,23 +124,10 @@ export default function DashboardPage() {
             Complaints by status
           </h2>
           <div className="relative h-36 my-2">
-            <Doughnut
-              data={{
-                labels: complaintEntries.map(([status]) => status.replaceAll("_", " ")),
-                datasets: [
-                  {
-                    data: complaintEntries.map(([, count]) => count),
-                    backgroundColor: complaintEntries.map(([status]) => complaintColor(status)),
-                    borderWidth: 0,
-                  },
-                ],
-              }}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                cutout: "68%",
-                plugins: { legend: { display: false } },
-              }}
+            <ComplaintDoughnut
+              labels={complaintEntries.map(([status]) => status.replaceAll("_", " "))}
+              values={complaintEntries.map(([, count]) => count)}
+              colors={complaintEntries.map(([status]) => complaintColor(status))}
             />
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-1.5 justify-center mt-1">

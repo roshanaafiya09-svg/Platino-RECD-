@@ -16,6 +16,7 @@ import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
 import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const R = ROLE_KEY;
@@ -63,6 +64,7 @@ const tok = (id: string) => { const u = users.find((x) => x.id === id)!; return 
 
 before(async () => {
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   createFakeRateLimitStore().install(prisma); // the IP limiter keeps its counters in the database; here they live in memory
   ({ signToken } = await import("../src/lib/jwt"));
   const { usersRouter } = await import("../src/routes/users");

@@ -20,6 +20,7 @@ import { PERMISSION_KEY as P, ROLE_KEY } from "@recd/shared";
 import { matchesCondition } from "./helpers/fakeOtpStore";
 import { makePng, pngDataUrl } from "./helpers/png";
 import { setReportStorageForTests, sha256Hex, type ReportStorage } from "../src/lib/reportStorage";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -150,6 +151,7 @@ before(async () => {
   console.error = () => {};
   console.log = () => {};
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   const { signToken } = await import("../src/lib/jwt");
   const { serviceReportsRouter } = await import("../src/routes/serviceReports");
   for (const model of ["user", "complaint", "complaintEvent", "serviceReport", "serviceReportEvent", "customer", "site", "recdUnit", "amcOrder", "regionManager"]) {

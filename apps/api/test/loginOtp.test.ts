@@ -32,6 +32,7 @@ import { loggablePayload } from "../src/services/notifications/notificationServi
 import { createFakeOtpStore } from "./helpers/fakeOtpStore";
 import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
 import { installFakeTransactions } from "./helpers/fakeTransactions";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Stub = Record<string, (...args: any[]) => any>;
@@ -95,6 +96,7 @@ before(async () => {
   }) as typeof fetch;
 
   const { prisma } = await import("../src/lib/prisma");
+  await useUserModelForAuth(prisma);
   installFakeTransactions(prisma); // OTP limits are decided under advisory locks inside a transaction
   createFakeRateLimitStore().install(prisma); // the IP limiter keeps its counters in the database; here they live in memory
   const { authRouter } = await import("../src/routes/auth");
