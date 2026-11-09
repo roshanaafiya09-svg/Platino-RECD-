@@ -1,5 +1,6 @@
 import "dotenv/config";
-import express, { type ErrorRequestHandler } from "express";
+import express from "express";
+import { apiErrorHandler } from "./lib/errorHandler";
 import cors from "cors";
 import { parseTrustProxy } from "./lib/proxyConfig";
 import { buildCorsOptions, parseAllowedOrigins, scrubSecretKeysFromJson, securityHeaders } from "./lib/httpSecurity";
@@ -82,14 +83,8 @@ app.use("/agent", agentProvidersRouter);
 app.use("/agent", agentConversationsRouter);
 app.use("/agent", agentCronRouter);
 
-// Catches anything a route handler throws or rejects with (Express 5 forwards rejected
-// async handlers here automatically) so a downstream failure - like the database being
-// unreachable - returns a clean error response instead of crashing the process.
-const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
-  console.error(err);
-  res.status(500).json({ error: "Internal server error" });
-};
-app.use(errorHandler);
+// Catches anything a route handler throws or rejects with, and malformed JSON bodies (400); see lib/errorHandler.ts.
+app.use(apiErrorHandler);
 
 const port = Number(process.env.PORT) || 4000;
 if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
