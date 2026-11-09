@@ -1,7 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import { resolveApiUrl } from "./apiConfig";
 
-const API_URL = (Constants.expoConfig?.extra?.apiUrl as string | undefined) ?? "http://localhost:4000";
+// Release builds use extra.apiUrl (production); only `expo start` (__DEV__) may use extra.devApiUrl. See apiConfig.ts.
+const API_URL = resolveApiUrl(Constants.expoConfig?.extra, __DEV__);
 const TOKEN_KEY = "recd_token";
 
 export async function getToken(): Promise<string | null> {

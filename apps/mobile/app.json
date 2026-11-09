@@ -16,7 +16,8 @@
       "package": "com.platino.recdtracker"
     },
     "extra": {
-      "apiUrl": "http://localhost:4000"
+      "apiUrl": "https://platino-recd.vercel.app",
+      "devApiUrl": "http://localhost:4000"
     }
   }
 }
