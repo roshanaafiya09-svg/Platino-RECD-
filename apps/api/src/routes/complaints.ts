@@ -8,7 +8,6 @@ import {
   ROLE_KEY,
   resolveComplaintUnit,
   isComplaintStatus,
-  TICKET_CLOSED_STATUSES,
   TICKET_LIST_LIMIT_DEFAULT,
   TICKET_LIST_LIMIT_MAX,
 } from "@recd/shared";
@@ -16,7 +15,6 @@ import type { Prisma } from "@prisma/client";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /** Statuses that count as "resolved" for the one-open-complaint-per-RECD-serial-number rule (matches the partial unique index). */
-const CLOSED_COMPLAINT_STATUSES: string[] = [...TICKET_CLOSED_STATUSES];
 import { prisma } from "../lib/prisma";
 import { isTicketNumberConflict } from "../lib/uniqueViolations";
 import { findBlockingActiveTicket, isActiveTicketConflict } from "../lib/ticketDuplicates";

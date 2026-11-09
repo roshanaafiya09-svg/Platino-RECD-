@@ -28,7 +28,7 @@ settingsRouter.get("/", authenticate, async (req: AuthenticatedRequest, res) => 
       });
     }
     res.json(settingsViewFor(settings as unknown as Record<string, unknown>, req.auth!));
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: "Failed to fetch settings" });
   }
 });
@@ -128,7 +128,7 @@ settingsRouter.put("/", authenticate, requirePermission(PERMISSION_KEY.MANAGE_SE
       create: { id: "singleton", ...fields },
     });
     res.json(settings);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: "Failed to update settings" });
   }
 });

@@ -67,7 +67,6 @@ import type { ReminderScope } from "./regions";
 const DAY_MS = 24 * 3600 * 1000;
 export const amcRef = (amcOrderId: string) => `AMC-${amcOrderId.slice(-6).toUpperCase()}`;
 const dateOnly = (d: Date) => d.toISOString().slice(0, 10);
-const REMINDER_CHANNELS = ["in_app", "email"] as const;
 
 // ---------------------------------------------------------------------------
 // Recipients

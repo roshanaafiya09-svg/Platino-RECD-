@@ -10,7 +10,7 @@
  * pattern (see executeConfirmedAction and the /actions/:actionId/confirm|reject routes below).
  */
 import { Router } from "express";
-import { canOverrideDuplicatePo, STAGE_KEY } from "@recd/shared";
+import { canOverrideDuplicatePo } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { findTakenSerials, parseSerialList, takenSerialsMessage } from "../lib/serials";
 import { isSerialConflict, SERIAL_RACE_MESSAGE } from "../lib/uniqueViolations";

@@ -23,11 +23,9 @@ import {
   OTP_BAD_CODE_MESSAGE,
   OTP_DELIVERY_FAILED_MESSAGE,
   OTP_DEV_ECHO_MESSAGE,
-  OTP_LIMIT_MESSAGE,
   OTP_REQUEST_ACCEPTED_MESSAGE,
   OTP_UNAVAILABLE_MESSAGE,
   consumeLoginOtp,
-  otpCooldownMessage,
   requestLoginOtp,
   type LoginOtpRequestOutcome,
 } from "../lib/loginOtp";

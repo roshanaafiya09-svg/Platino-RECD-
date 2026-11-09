@@ -58,7 +58,7 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
       if (auth.customerId && order && order.customerId !== auth.customerId) return forbidden("orders");
       return order;
     }
-    case "complaint":
+    case "complaint": {
       if (
         !auth.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) &&
         !auth.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW) &&
@@ -73,6 +73,7 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
         },
       });
       return ticket?.archivedAt ? null : ticket; // archived tickets are out of every working view
+    }
   }
 }
 
