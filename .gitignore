@@ -11,3 +11,7 @@ build/
 coverage/
 *.tsbuildinfo
 .claude/settings.local.json
+
+# Environment files may hold secrets - never commit (the example files are the only exception)
+.env.*
+!.env.example
