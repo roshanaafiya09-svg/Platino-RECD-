@@ -58,3 +58,23 @@ test("service_reminder: a daily overdue reminder says it is overdue and for how 
   assert.match(first.text, /Due soon: Service ticket TCK-1/);
   assert.ok(!first.text.includes("Days overdue"));
 });
+
+test("service_reminder: the due-date reminder says it is due TODAY (not overdue, not 'due soon', no overdue-days line)", () => {
+  const base = { activityType: "ticket", activityRef: "TCK-1", customerName: "Acme", siteName: "Plant", serialNo: "SN1", dueDate: "2031-06-10" };
+  const today = renderEmail("service_reminder", { ...base, overdue: false, dueToday: true, daysOverdue: 0, repeat: true });
+  assert.match(today.text, /Due today: Service ticket TCK-1/);
+  assert.ok(!today.text.includes("OVERDUE"));
+  assert.ok(!today.text.includes("Days overdue"));
+  assert.ok(!today.text.includes("Due soon"));
+});
+
+test("service_reminder_escalated: says it is an ESCALATION, how many hours after the due date, and asks the manager to follow up; escapes its fields", () => {
+  const base = { activityType: "ticket", activityRef: "TCK-9", customerName: EVIL, siteName: "Plant", serialNo: "SN9", dueDate: "2031-06-10", overdue: true, level: 1, escalationHours: 48 };
+  const m = renderEmail("service_reminder_escalated", base);
+  assert.match(m.subject, /ESCALATED reminder: TCK-9/);
+  assert.match(m.text, /ESCALATION: Service ticket TCK-9 is still unresolved 48 hours after its due date - please follow up/);
+  assert.ok(m.html.includes(ESCAPED), "customer name is HTML-escaped");
+  assert.ok(!m.html.includes("<script>"));
+  const noHours = renderEmail("service_reminder_escalated", { ...base, escalationHours: undefined });
+  assert.match(noHours.text, /ESCALATION: Service ticket TCK-9 is still unresolved after its due date - please follow up/);
+});

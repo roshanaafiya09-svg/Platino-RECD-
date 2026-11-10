@@ -71,7 +71,8 @@ export const UNDELIVERED_REMINDER_STATUSES: string[] = [REMINDER_STATUS.FAILED, 
 /** Every status from which a reminder can be escalated. */
 export const ESCALATABLE_REMINDER_STATUSES: string[] = [REMINDER_STATUS.SENT, ...UNDELIVERED_REMINDER_STATUSES];
 
-export const MAX_REMINDER_ESCALATION_LEVEL = 2;
+/** The approved R6 policy has ONE escalation (to the responsible manager), not two. */
+export const MAX_REMINDER_ESCALATION_LEVEL = 1;
 export const MAX_DELIVERY_ATTEMPTS = 5;
 /** A reminder stuck in "sending" (the job died) can be picked up again after this long. */
 export const SENDING_STALE_MINUTES = 15;
@@ -103,26 +104,38 @@ export function reminderEligible(dueDate: Date | string | null | undefined, now:
 }
 
 /**
- * Is an unacknowledged reminder due for its next escalation level?
- *  - A DELIVERED reminder (status sent) counts its hours from the delivery (`sentAt`), then from the previous escalation.
- *  - An UNDELIVERED one (failed, or no recipient) never got a `sentAt`, so waiting for one would block escalation for ever: its hours count from
- *    when the reminder was created (the moment the activity became due for a reminder), then from the previous escalation. Same hours, same levels.
+ * Is an unacknowledged reminder due for its escalation? (Approved R6 policy.)
+ *  - The clock is the DUE DATE of the activity, never the time a reminder was delivered: the escalation is due once `escalationHours` (48 in
+ *    the approved policy) have passed since the due date. A due date is a calendar DATE stored as UTC midnight, so "48 hours after the due date" is
+ *    that midnight plus 48 hours; the daily job then escalates at its first run after that instant.
+ *  - There is a single escalation (MAX_REMINDER_ESCALATION_LEVEL = 1). It only notifies; it never changes the activity's status.
+ *  - Works the same for a delivered reminder and an undelivered one (failed / no recipient): a failed delivery must not stop an overdue activity from
+ *    being escalated.
+ *  - An escalation that fell due and was already attempted (its delivery failed) stays due until it is delivered (a retry), however the clock moves.
  */
 export function escalationDue(
-  r: { status: string; sentAt: Date | null; acknowledgedAt: Date | null; escalationLevel: number; lastEscalatedAt: Date | null; createdAt?: Date | null; escalationAttempts?: number | null },
+  r: { status: string; dueDate: Date | string; acknowledgedAt: Date | null; escalationLevel: number; escalationAttempts?: number | null },
   escalationHours: number | null | undefined,
   now: Date,
 ): boolean {
   if (escalationHours == null || escalationHours <= 0) return false;
   if (r.acknowledgedAt || !ESCALATABLE_REMINDER_STATUSES.includes(r.status)) return false;
   if (r.escalationLevel >= MAX_REMINDER_ESCALATION_LEVEL) return false;
-  // A level that fell due and was already attempted (its delivery failed) stays due until it is delivered, even if the first reminder was
-  // delivered in the meantime and restarted the clock.
   if ((r.escalationAttempts ?? 0) > 0) return true;
-  const start = r.status === REMINDER_STATUS.SENT ? r.sentAt : r.sentAt ?? r.createdAt ?? null;
-  const since = r.lastEscalatedAt ?? start;
-  if (!since) return false;
-  return now.getTime() - since.getTime() >= escalationHours * 3600 * 1000;
+  const due = new Date(r.dueDate).getTime();
+  if (Number.isNaN(due)) return false;
+  return now.getTime() - due >= escalationHours * 3600 * 1000;
+}
+
+/**
+ * Is today (the UTC calendar day of `now`) the due date or later? The daily reminder runs on the due date itself and on every day after it, so this is
+ * the test for "send today's reminder" (the first reminder, sent earlier within the lead time, is separate).
+ */
+export function dueDayReached(dueDate: Date | string | null | undefined, now: Date): boolean {
+  if (!dueDate) return false;
+  const due = new Date(dueDate);
+  if (Number.isNaN(due.getTime())) return false;
+  return due.toISOString().slice(0, 10) <= now.toISOString().slice(0, 10);
 }
 
 export const dueDateSchema = z
@@ -153,20 +166,20 @@ export const updateAmcVisitSchema = z
 export const reminderPolicySchema = z.object({
   /** Send the first reminder when an activity is due within this many days (and for everything overdue). */
   reminderLeadDays: z.number().int().min(0).max(365).nullable(),
-  /** Escalate a reminder nobody has acknowledged after this many hours (once per level, two levels). */
+  /** Escalate (once) a reminder nobody has acknowledged when the activity is still unresolved this many hours AFTER ITS DUE DATE (approved policy: 48). */
   reminderEscalationHours: z.number().int().min(1).max(24 * 60).nullable(),
 });
 
 export const REMINDER_POLICY_DEFAULTS = { reminderLeadDays: null, reminderEscalationHours: null } as const;
 
 /**
- * The PROPOSED reminder workflow, for mentor review. It is a suggestion shown in Settings, never a default: nothing is switched on
- * until an authorised person saves these values in the environment concerned (the stored policy stays empty = off).
- *   Stage 1  first reminder  : 2 calendar days before the due date -> the region's active Service Managers, then one reminder every
- *                              overdue day (UTC) until the activity is finished / archived or the reminder is acknowledged
- *   Stage 2  escalation 1    : unacknowledged 24 h after the reminder was DELIVERED -> the region's Regional Managers
- *   Stage 3  escalation 2    : unacknowledged 24 h after escalation 1 was DELIVERED -> Management and Owner/Admin
- * (24 h per stage is the single `reminderEscalationHours` value.) Both clocks start at a successful delivery, never at the
- * activity's creation or due date.
+ * The APPROVED R6 reminder workflow (it is only pre-filled in Settings as a proposal: nothing is switched on until an authorised person saves these
+ * values in the environment concerned; the stored policy stays empty = off).
+ *   - first reminder   : 2 calendar days before the due date
+ *   - due date         : another reminder on the due date itself
+ *   - after due date   : one reminder every day (UTC) until the activity is resolved / closed / archived
+ *   - escalation       : once, `reminderEscalationHours` (48) hours after the DUE DATE, if still unresolved and unacknowledged -> the responsible Regional
+ *                        Managers of the activity's region (Management if the region has none). Notification only: it never closes or changes the activity.
+ *   Reminder recipients: the activity's assigned engineer (tickets), the region's Regional Managers and the region's Service Managers.
  */
-export const PROPOSED_REMINDER_POLICY = { reminderLeadDays: 2, reminderEscalationHours: 24 } as const;
+export const PROPOSED_REMINDER_POLICY = { reminderLeadDays: 2, reminderEscalationHours: 48 } as const;

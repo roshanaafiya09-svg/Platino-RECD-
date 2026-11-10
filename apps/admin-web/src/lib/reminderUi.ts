@@ -1,4 +1,4 @@
-import { MAX_DELIVERY_ATTEMPTS } from "@recd/shared";
+import { MAX_DELIVERY_ATTEMPTS, MAX_REMINDER_ESCALATION_LEVEL } from "@recd/shared";
 
 export interface ReminderLike {
   status: string;
@@ -26,7 +26,7 @@ export interface EscalationLike {
   escalationAttempts?: number | null;
 }
 
-const LAST_LEVEL = 2;
+const LAST_LEVEL = MAX_REMINDER_ESCALATION_LEVEL; // the approved policy has a single escalation
 
 /**
  * One plain sentence about escalation, from the values the API actually returns - or null when there is nothing to add: no

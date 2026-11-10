@@ -45,17 +45,17 @@ export default function ReminderSettings() {
     <section className="rounded-xl border border-gray-200 bg-white p-4 sm:p-6" data-testid="reminder-settings">
       <h2 className="text-base font-semibold text-gray-900">Service reminders (due dates)</h2>
       <p className="mt-1 text-sm text-gray-500">
-        Reminders go to the Service Managers mapped to the activity&apos;s region. Leave both boxes empty to keep reminders switched off. These are separate from the ticket-age SLA above.
+        Reminders go to the ticket&apos;s assigned engineer and to the Regional Managers and Service Managers mapped to the activity&apos;s region. Leave both boxes empty to keep reminders switched off. These are separate from the ticket-age SLA above.
       </p>
       <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" data-testid="reminder-proposed-policy">
-        <p className="font-medium">Proposed workflow (for mentor review - not active)</p>
+        <p className="font-medium">Approved workflow (not active until saved below)</p>
         <ol className="mt-1 list-decimal pl-5 text-xs space-y-0.5">
-          <li>First reminder {PROPOSED_REMINDER_POLICY.reminderLeadDays} days before the due date, to the region&apos;s Service Managers.</li>
-          <li>Not acknowledged {PROPOSED_REMINDER_POLICY.reminderEscalationHours} hours after it was delivered: escalate to the region&apos;s Regional Managers.</li>
-          <li>Still not acknowledged {PROPOSED_REMINDER_POLICY.reminderEscalationHours} hours after that escalation was delivered: escalate to Management.</li>
+          <li>First reminder {PROPOSED_REMINDER_POLICY.reminderLeadDays} days before the due date, to the assigned engineer and the region&apos;s Regional and Service Managers.</li>
+          <li>Another reminder on the due date, then one every day until the ticket is resolved or closed.</li>
+          <li>Still unresolved {PROPOSED_REMINDER_POLICY.reminderEscalationHours} hours after the due date: escalate once to the region&apos;s Regional Managers (Management if the region has none). Escalation only notifies - the ticket is not changed.</li>
         </ol>
         <button type="button" onClick={() => { setLead(String(PROPOSED_REMINDER_POLICY.reminderLeadDays)); setHours(String(PROPOSED_REMINDER_POLICY.reminderEscalationHours)); setMessage(null); }} className="mt-2 rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-medium" data-testid="reminder-fill-proposed">
-          Fill in the proposed values
+          Fill in the approved values
         </button>
         <span className="ml-2 text-[11px]">This only fills the boxes below. Nothing changes, and reminders stay off, until the policy is saved here in the environment you are using.</span>
       </div>
@@ -65,7 +65,7 @@ export default function ReminderSettings() {
           <input type="number" min={0} max={365} className="field w-full" value={lead} onChange={(e) => setLead(e.target.value)} placeholder="empty = off" data-testid="reminder-lead-days" />
         </label>
         <label className="block text-sm">
-          <span className="block text-xs font-medium text-gray-500 mb-1">Escalate a reminder nobody acknowledged after (hours)</span>
+          <span className="block text-xs font-medium text-gray-500 mb-1">Escalate if still unresolved this many hours after the due date</span>
           <input type="number" min={1} className="field w-full" value={hours} onChange={(e) => setHours(e.target.value)} placeholder="empty = no escalation" disabled={lead.trim() === ""} data-testid="reminder-escalation-hours" />
         </label>
         <div className="sm:col-span-2 flex items-center gap-3">

@@ -123,7 +123,7 @@ function Dashboard() {
       )}
       {data && data.policy.remindersEnabled && (
         <p className="text-xs text-gray-500">
-          Policy: reminders start {data.policy.reminderLeadDays} day(s) before the due date; {data.policy.reminderEscalationHours ? `an unacknowledged reminder escalates after ${data.policy.reminderEscalationHours} h` : "escalation is off"}.
+          Policy: reminders start {data.policy.reminderLeadDays} day(s) before the due date; {data.policy.reminderEscalationHours ? `an activity still unresolved ${data.policy.reminderEscalationHours} h after its due date is escalated once` : "escalation is off"}.
         </p>
       )}
       {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}

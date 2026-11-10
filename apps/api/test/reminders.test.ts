@@ -336,18 +336,6 @@ test("job: the AMC contract expiry is NOT a visit due date - an AMC order with n
 // Sending: recipients, content, delivery, duplicates
 // =============================================================================================
 
-test("job: the reminder goes to the ACTIVE Service Managers of the activity's region - not to RMs, inactive managers, other regions or anyone else", async () => {
-  reset();
-  await runJob();
-  const north = reminderOf("tOver");
-  assert.equal(north.status, "sent");
-  const ids = notifications.filter((n) => n.payload.activityRef === "TCK-1").map((n) => n.recipientId);
-  assert.deepEqual([...new Set(ids)], ["smR1"], "North: the active Service Manager only");
-  const south = notifications.filter((n) => n.payload.activityRef === "TCK-6").map((n) => n.recipientId);
-  assert.deepEqual([...new Set(south)], ["smR2"]);
-  for (const nobody of ["smR1off", "rm1", "rm2", "smFree", "eng", "custA", "mgmt", "vendorEng"]) assert.ok(!notifications.some((n) => n.recipientId === nobody && n.templateKey === "service_reminder"), nobody);
-});
-
 test("job: every reminder carries customer, site, RECD serial number, due date, the activity reference and a link to the dashboard", async () => {
   reset();
   await runJob();
@@ -493,7 +481,7 @@ test("job: an inactive-only region has no recipient (inactive managers are never
 
 test("job: when an activity is completed the reminder is closed and nothing further is sent or escalated", async () => {
   reset();
-  settings.reminderEscalationHours = 24;
+  settings.reminderEscalationHours = 1440; // far beyond the due dates: not yet due for escalation when the activities are finished
   await runJob();
   tickets.tOver.status = "resolved";
   visits.vOver.status = "completed";
@@ -533,33 +521,6 @@ test("escalation is off until a time is approved (reminderEscalationHours empty)
   assert.equal(reminderOf("tOver").escalationLevel, 0);
 });
 
-test("escalation: an unacknowledged reminder goes to the region's Regional Manager after the threshold, then to Management, then stops", async () => {
-  reset();
-  settings.reminderEscalationHours = 24;
-  await runJob();
-  const t = (h: number) => new Date(NOW.getTime() + h * HOUR);
-
-  let out = await runJob(t(23));
-  assert.equal(out.escalated, 0, "before the threshold");
-  out = await runJob(t(25));
-  assert.equal(out.escalated, 4, "all four unacknowledged reminders (three North, one South)");
-  const rem = reminderOf("tOver");
-  assert.deepEqual([rem.escalationLevel], [1]);
-  assert.deepEqual([...new Set(notifications.filter((n) => n.templateKey === "service_reminder_escalated" && n.payload.activityRef === "TCK-1").map((n) => n.recipientId))], ["rm1"], "level 1: the region's Regional Manager");
-  const msg = notifications.find((n) => n.templateKey === "service_reminder_escalated" && n.payload.activityRef === "TCK-1")!;
-  assert.deepEqual([msg.payload.customerName, msg.payload.siteName, msg.payload.serialNo, msg.payload.dueDate, msg.payload.level], ["Acme Power", "Acme Plant 1", "SN-001", iso(-10), 1]);
-
-  out = await runJob(t(26));
-  assert.equal(out.escalated, 0, "not again at once");
-  await runJob(t(50));
-  assert.equal(rem.escalationLevel, 2);
-  assert.deepEqual([...new Set(notifications.filter((n) => n.templateKey === "service_reminder_escalated" && n.payload.activityRef === "TCK-1" && n.payload.level === 2).map((n) => n.recipientId))].sort(), ["mgmt", "owner"], "level 2: Management");
-  await runJob(t(200));
-  assert.equal(rem.escalationLevel, 2, "two levels at most");
-  const levels = reminderEvents.filter((e) => e.reminderId === rem.id && e.type === "escalated").map((e) => e.level);
-  assert.deepEqual(levels, [1, 2], "each level is recorded once");
-});
-
 test("escalation: repeated and simultaneous runs escalate each level exactly once", async () => {
   reset();
   settings.reminderEscalationHours = 24;
@@ -569,56 +530,6 @@ test("escalation: repeated and simultaneous runs escalate each level exactly onc
   const esc = notifications.filter((n) => n.templateKey === "service_reminder_escalated" && n.payload.activityRef === "TCK-1" && n.channel === "in_app");
   assert.equal(esc.length, 1, "one Regional Manager, one in-app message");
   assert.equal(reminderEvents.filter((e) => e.reminderId === reminderOf("tOver").id && e.type === "escalated").length, 1);
-});
-
-test("escalation: an acknowledged reminder is never escalated", async () => {
-  reset();
-  settings.reminderEscalationHours = 24;
-  await runJob();
-  const ack = await call("smR1", "POST", `/reminders/${reminderOf("tOver").id}/acknowledge`);
-  assert.equal(ack.status, 200);
-  await runJob(new Date(NOW.getTime() + 100 * HOUR));
-  assert.equal(reminderOf("tOver").escalationLevel, 0);
-  assert.equal(notifications.filter((n) => n.templateKey === "service_reminder_escalated" && n.payload.activityRef === "TCK-1").length, 0);
-  assert.ok(reminderOf("tSoon").escalationLevel > 0, "other, unacknowledged reminders still escalate");
-});
-
-test("escalation: recipients who already had the reminder are skipped, and with no other Regional Manager it goes to Management", async () => {
-  reset();
-  settings.reminderEscalationHours = 24;
-  regionManagers = regionManagers.filter((m) => !(m.regionId === "r1" && m.userId === "smR1")); // first line is now the RM
-  await runJob();
-  assert.deepEqual([...new Set(notifications.filter((n) => n.payload.activityRef === "TCK-1" && n.templateKey === "service_reminder").map((n) => n.recipientId))], ["rm1"]);
-  await runJob(new Date(NOW.getTime() + 25 * HOUR));
-  assert.deepEqual([...new Set(notifications.filter((n) => n.payload.activityRef === "TCK-1" && n.templateKey === "service_reminder_escalated").map((n) => n.recipientId))].sort(), ["mgmt", "owner"], "rm1 already had it, so level 1 goes to Management");
-});
-
-test("escalation: with nobody to escalate to, the attempt is recorded, the level still advances (no endless retry) and nothing unrelated is contacted", async () => {
-  reset();
-  settings.reminderEscalationHours = 24;
-  regionManagers = regionManagers.filter((m) => m.userId !== "rm1" && m.userId !== "rm2");
-  delete users.mgmt;
-  delete users.owner;
-  await runJob();
-  const out = await runJob(new Date(NOW.getTime() + 25 * HOUR));
-  assert.ok(out.escalationNoRecipient >= 1);
-  assert.equal(reminderOf("tOver").escalationLevel, 1);
-  assert.ok(reminderEvents.some((e) => e.reminderId === reminderOf("tOver").id && e.type === "escalation_no_recipient"));
-  assert.equal(notifications.filter((n) => n.templateKey === "service_reminder_escalated").length, 0);
-});
-
-test("escalation: a reminder that never reached anyone (no recipient) is NOT hidden - it escalates after the approved hours, counted from its creation", async () => {
-  reset();
-  settings.reminderEscalationHours = 24;
-  regionManagers = regionManagers.filter((m) => m.regionId !== "r1");
-  await runJob();
-  assert.equal(reminderOf("tOver").status, "no_recipient");
-  await runJob(new Date(NOW.getTime() + 23 * HOUR));
-  assert.equal(reminderOf("tOver").escalationLevel, 0, "before the threshold");
-  await runJob(new Date(NOW.getTime() + 25 * HOUR));
-  assert.equal(reminderOf("tOver").status, "no_recipient", "escalating does not pretend the first reminder was delivered");
-  assert.equal(reminderOf("tOver").escalationLevel, 1);
-  assert.ok(notifications.some((n) => n.templateKey === "service_reminder_escalated" && n.payload.activityRef === "TCK-1"), "someone (Management, the region has no manager) was told");
 });
 
 test("the existing ticket-age escalation is unchanged: mapping Service Managers does not add them to the SLA alerts", async () => {
@@ -678,6 +589,7 @@ test("first reminder: when every recipient fails it is 'failed' (delivery_failed
 
   reset();
   emailFailFor.add("smR1");
+  emailFailFor.add("rm1"); // the region's Regional Manager is a reminder recipient too
   await runJob();
   assert.deepEqual([reminderOf("tOver").status, reminderOf("tOver").statusReason], ["failed", "delivery_failed"]);
 });
@@ -689,74 +601,6 @@ test("overlapping runs never produce a duplicate successful e-mail for one recip
   await runJob();
   const counts = reminderEvents.filter((e) => e.type === "sent" && e.level === 0).reduce((m, e) => m.set(`${e.reminderId}:${e.recipientId}`, (m.get(`${e.reminderId}:${e.recipientId}`) ?? 0) + 1), new Map<string, number>());
   assert.ok([...counts.values()].every((c) => c === 1), JSON.stringify([...counts]));
-});
-
-test("escalation: a failed delivery does not consume the level - it stays due, is retried, and succeeds exactly once", async () => {
-  reset();
-  settings.reminderEscalationHours = 24;
-  await runJob();
-  const rem = reminderOf("tOver");
-  emailFailFor.add("rm1"); // level 1 goes to the North Regional Manager
-  let out = await runJob(new Date(NOW.getTime() + 25 * HOUR));
-  assert.equal(rem.escalationLevel, 0, "the level is not claimed while nobody was reached");
-  assert.equal(rem.escalationAttempts, 1);
-  assert.equal(rem.escalationClaimedAt, null, "the lease is released so the next run can retry");
-  assert.ok(out.escalationRetryPending >= 1);
-  assert.equal(reminderEvents.filter((e) => e.reminderId === rem.id && e.type === "escalated").length, 0, "no 'escalated' event for a failed attempt");
-  assert.ok(reminderEvents.some((e) => e.reminderId === rem.id && e.level === 1 && e.type === "delivery_failed" && e.recipientId === "rm1" && e.detail.attempt === 1));
-
-  emailFailFor.clear();
-  out = await runJob(new Date(NOW.getTime() + 26 * HOUR));
-  assert.deepEqual([rem.escalationLevel, rem.escalationAttempts], [1, 0]);
-  assert.equal(emailSends.filter((x) => x === "rm1:service_reminder_escalated").length, 3, "the three North reminders were escalated to the Regional Manager once each, on the retry");
-  assert.equal(reminderEvents.filter((e) => e.reminderId === rem.id && e.type === "escalated" && e.level === 1).length, 1);
-  assert.equal(reminderEvents.filter((e) => e.reminderId === rem.id && e.level === 1 && e.type === "sent" && e.recipientId === "rm1").length, 1);
-  const before = emailSends.filter((x) => x.includes("escalated")).length;
-  await runJob(new Date(NOW.getTime() + 27 * HOUR));
-  assert.equal(emailSends.filter((x) => x.includes("escalated")).length, before, "nothing more once it succeeded");
-});
-
-test("escalation: partial failure keeps the successful recipient and retries only the failed one (level 2 = Management)", async () => {
-  reset();
-  settings.reminderEscalationHours = 24;
-  await runJob();
-  await runJob(new Date(NOW.getTime() + 25 * HOUR)); // level 1 complete
-  const rem = reminderOf("tOver");
-  assert.equal(rem.escalationLevel, 1);
-  emailFailFor.add("owner");
-  await runJob(new Date(NOW.getTime() + 50 * HOUR));
-  assert.equal(rem.escalationLevel, 1, "level 2 not settled: the owner was not reached");
-  assert.ok(emailSends.includes("mgmt:service_reminder_escalated"));
-  emailFailFor.clear();
-  await runJob(new Date(NOW.getTime() + 51 * HOUR));
-  assert.equal(rem.escalationLevel, 2);
-  assert.equal(emailSends.filter((x) => x === "mgmt:service_reminder_escalated").length, 4, "Management got each of the four reminders once - not again when only the owner was retried");
-  const mgmtSent = reminderEvents.filter((e) => e.reminderId === rem.id && e.level === 2 && e.recipientId === "mgmt" && e.type === "sent");
-  const ownerSent = reminderEvents.filter((e) => e.reminderId === rem.id && e.level === 2 && e.recipientId === "owner" && e.type === "sent");
-  assert.deepEqual([mgmtSent.length, ownerSent.length], [1, 1], "Management was e-mailed once, the owner on the retry");
-});
-
-test("escalation: retries stop after the attempt limit, and a fresh lease keeps overlapping runs out", async () => {
-  reset();
-  settings.reminderEscalationHours = 24;
-  await runJob();
-  const rem = reminderOf("tOver");
-  emailFailFor.add("rm1");
-  for (let i = 0; i < 8; i++) await runJob(new Date(NOW.getTime() + (25 + i) * HOUR));
-  assert.equal(rem.escalationAttempts, 5, "the existing limit of five attempts");
-  assert.equal(rem.escalationLevel, 0);
-
-  // a lease held by a running job (fresh) blocks a second run; a stale one (the job died) can be taken over
-  reset();
-  settings.reminderEscalationHours = 24;
-  await runJob();
-  const r2 = reminderOf("tOver");
-  const t = new Date(NOW.getTime() + 25 * HOUR);
-  r2.escalationClaimedAt = new Date(t.getTime() - 5 * 60_000);
-  await runJob(t);
-  assert.deepEqual([r2.escalationLevel, r2.escalationAttempts], [0, 0], "5 minutes: another run may still be working on it");
-  await runJob(new Date(t.getTime() + 20 * 60_000));
-  assert.equal(r2.escalationLevel, 1, "after 15 minutes the lease is taken over and the level is delivered");
 });
 
 test("escalation: overlapping runs deliver each level once, even while one attempt is failing for another recipient", async () => {
@@ -1023,277 +867,16 @@ test("cron: the scheduled job needs the secret - none configured, a wrong one or
 // =============================================================================================
 
 const approved = () => { reset(); settings.reminderLeadDays = 3; settings.reminderEscalationHours = 24; };
-const at = (h: number) => new Date(NOW.getTime() + h * HOUR);
-const addTicket = (id: string, dueInDays: number, extra: Record<string, unknown> = {}) => {
-  tickets[id] = { id, ticketNumber: `TCK-${id}`, status: "open", dueDate: off(dueInDays), customerId: "cA", siteId: "s1", unitId: "u1", customer: { name: "Acme Power" }, site: site("s1", "r1", "Acme Plant 1"), unit: { id: "u1", serialNo: "SN-001" }, ...extra };
-};
-const escalatedTo = (activityRef: string, level: number) =>
-  reminderEvents.filter((e) => e.type === "sent" && e.level === level && e.channel === "email" && reminders.find((r) => r.id === e.reminderId)?.activityRef === activityRef).map((e) => e.recipientId).sort();
-
-test("approved policy, stage 1: a reminder exists from exactly 3 calendar days before the due date - not before - and for everything overdue", async () => {
-  approved();
-  addTicket("t3", 3);
-  addTicket("t4", 4);
-  addTicket("t5", 5);
-  await runJob(NOW);
-  assert.ok(reminderOf("t3"), "due in 3 days: reminded now");
-  assert.ok(reminderOf("tSoon"), "due in 2 days");
-  assert.ok(reminderOf("tOver"), "overdue");
-  assert.equal(reminderOf("t4"), undefined, "due in 4 days: too early");
-  assert.equal(reminderOf("t5"), undefined);
-  assert.equal(reminderOf("tFar"), undefined);
-  assert.equal(reminderOf("tNone"), undefined, "no due date: nothing is invented");
-  assert.equal(reminderOf("tDone"), undefined, "finished tickets are not reminded");
-  // a day later the 4-day ticket has entered its window
-  await runJob(at(24));
-  assert.ok(reminderOf("t4"), "now inside the 3-day window");
-  assert.equal(reminderOf("t5"), undefined, "5 days out is still too early");
-});
-
-test("approved policy, stage 1: the reminder goes to the region's active Service Manager and carries customer, site, serial, due date, reference and link", async () => {
-  approved();
-  addTicket("t3", 3);
-  await runJob(NOW);
-  const rem = reminderOf("t3");
-  assert.equal(rem.status, "sent");
-  const toWhom = reminderEvents.filter((e) => e.reminderId === rem.id && e.type === "sent" && e.level === 0).map((e) => e.recipientId);
-  assert.deepEqual(toWhom, ["smR1"], "North's active Service Manager - not the inactive one, the Regional Manager or South's manager");
-  const n = notifications.find((x) => x.payload.activityRef === "TCK-t3" && x.channel === "email")!;
-  assert.deepEqual([n.payload.customerName, n.payload.siteName, n.payload.serialNo, n.payload.dueDate, n.payload.activityRef, n.payload.overdue], ["Acme Power", "Acme Plant 1", "SN-001", iso(3), "TCK-t3", false]);
-  assert.equal(n.payload.link, `https://app.example.test/reminders?focus=${rem.id}`);
-  assert.equal(rem.sentAt.getTime(), NOW.getTime(), "the countdown starts at the delivery");
-});
-
-test("approved policy, stages 2 and 3: Regional Manager 24 h after the reminder was delivered, Management 24 h after THAT escalation was delivered", async () => {
-  approved();
-  await runJob(NOW); // delivered at t=0
-  const rem = reminderOf("tOver");
-  assert.equal(rem.status, "sent");
-
-  await runJob(at(23));
-  assert.equal(rem.escalationLevel, 0, "23 h: too early");
-  await runJob(at(30)); // the job was not run between 24 h and 30 h: the escalation is delivered late, at 30 h
-  assert.equal(rem.escalationLevel, 1);
-  assert.deepEqual(escalatedTo("TCK-1", 1), ["rm1"], "stage 2: the region's Regional Manager");
-  assert.equal(rem.lastEscalatedAt.getTime(), at(30).getTime(), "the stage-3 clock starts when stage 2 was DELIVERED");
-
-  await runJob(at(48)); // 48 h after the first delivery, but only 18 h after the escalation
-  assert.equal(rem.escalationLevel, 1, "not measured from the original delivery or the due date");
-  await runJob(at(53));
-  assert.equal(rem.escalationLevel, 1, "23 h after the escalation: too early");
-  await runJob(at(54));
-  assert.equal(rem.escalationLevel, 2);
-  assert.deepEqual(escalatedTo("TCK-1", 2), ["mgmt", "owner"], "stage 3: Management and Owner/Admin");
-  await runJob(at(400));
-  assert.equal(rem.escalationLevel, 2, "never beyond stage 3");
-  assert.deepEqual(reminderEvents.filter((e) => e.reminderId === rem.id && e.type === "escalated").map((e) => e.level), [1, 2]);
-});
-
-test("approved policy: a reminder whose delivery FAILED still escalates after 24 h (counted from creation); a later delivery does not restart the stage-2 clock", async () => {
-  approved();
-  emailFailFor.add("smR1");
-  await runJob(NOW);
-  const rem = reminderOf("tOver");
-  assert.deepEqual([rem.status, rem.sentAt], ["failed", null], "a failed reminder is never treated as delivered");
-  await runJob(at(23));
-  assert.equal(rem.escalationLevel, 0, "too early");
-  await runJob(at(30)); // still failing 30 h later
-  assert.equal(rem.escalationLevel, 1, "the failure did not block the escalation that is due");
-  assert.equal(rem.status, "failed");
-  assert.deepEqual(escalatedTo("TCK-1", 1), ["rm1"], "the region's Regional Manager, who had not had the reminder");
-  emailFailFor.clear();
-  await runJob(at(31)); // the first reminder is finally delivered at 31 h
-  assert.equal(rem.status, "sent");
-  assert.equal(rem.sentAt.getTime(), at(31).getTime());
-  await runJob(at(53));
-  assert.equal(rem.escalationLevel, 1, "23 h after the stage-1 escalation: too early");
-  await runJob(at(55));
-  assert.equal(rem.escalationLevel, 2, "24 h after the stage-1 escalation (30 h) -> stage 2");
-});
-
-test("approved policy: an acknowledgement stops all further escalation, at either stage", async () => {
-  approved();
-  await runJob(NOW);
-  const north = reminderOf("tOver");
-  const south = reminderOf("tSouth");
-  assert.equal((await call("rm1", "POST", `/reminders/${north.id}/acknowledge`)).status, 200, "acknowledged before any escalation");
-  await runJob(at(30)); // the other (South) reminder reaches stage 2
-  assert.equal(north.escalationLevel, 0);
-  assert.equal(south.escalationLevel, 1);
-  assert.equal((await call("rm2", "POST", `/reminders/${south.id}/acknowledge`)).status, 200, "acknowledged after stage 2");
-  await runJob(at(200));
-  assert.equal(north.escalationLevel, 0, "stage 2 never happened for the first");
-  assert.equal(south.escalationLevel, 1, "stage 3 never happens for the second");
-  assert.ok(!notifications.some((n) => n.templateKey === "service_reminder_escalated" && n.payload.activityRef === "TCK-6" && n.payload.level === 2));
-  assert.ok(!notifications.some((n) => n.templateKey === "service_reminder_escalated" && n.payload.activityRef === "TCK-1"));
-});
-
-test("approved policy: failed deliveries stay retryable at every stage, partial delivery never repeats a successful message, and an overlapping run never duplicates an escalation", async () => {
-  approved();
-  regionManagers.push({ regionId: "r1", userId: "smFree" }); // a second North Service Manager
-  emailFailFor.add("smFree");
-  await runJob(NOW);
-  const rem = reminderOf("tOver");
-  assert.deepEqual([rem.status, rem.statusReason], ["failed", "partial_delivery"]);
-  const smR1Mails = () => emailSends.filter((x) => x === "smR1:service_reminder").length;
-  const first = smR1Mails();
-  emailFailFor.clear();
-  await runJob(at(1));
-  assert.equal(rem.status, "sent");
-  assert.equal(smR1Mails(), first, "smR1 already had it: not e-mailed again");
-  assert.ok(emailSends.includes("smFree:service_reminder"), "only the failed recipient was retried");
-
-  emailFailFor.add("rm1"); // stage 2 fails first
-  await runJob(at(26));
-  assert.equal(rem.escalationLevel, 0, "the failed escalation did not consume the stage");
-  emailFailFor.clear();
-  const later = at(27);
-  await Promise.all([runJob(later), runJob(later), runJob(later)]);
-  assert.equal(rem.escalationLevel, 1);
-  assert.equal(reminderEvents.filter((e) => e.reminderId === rem.id && e.level === 1 && e.type === "sent" && e.recipientId === "rm1").length, 1, "one successful stage-2 delivery despite three overlapping runs");
-});
-
-test("approved policy: no recipient - nothing is sent to anyone unrelated, the reminder shows it, it still escalates to Management, and it is retried when a manager is mapped", async () => {
-  approved();
-  regionManagers = regionManagers.filter((m) => m.regionId !== "r1");
-  await runJob(NOW);
-  const rem = reminderOf("tOver");
-  assert.deepEqual([rem.status, rem.statusReason, rem.sentAt], ["no_recipient", "no_active_manager", null]);
-  assert.ok(!notifications.some((n) => n.payload.activityRef === "TCK-1"), "the first reminder went to nobody");
-  assert.equal((await call("mgmt", "POST", `/reminders/${rem.id}/acknowledge`)).status, 409, "and, before any escalation, it cannot be acknowledged");
-  await runJob(at(100));
-  assert.equal(rem.escalationLevel, 1);
-  assert.deepEqual(escalatedTo("TCK-1", 1), ["mgmt", "owner"], "escalated to Management only (the region has no managers at all)");
-  assert.equal((await call("mgmt", "POST", `/reminders/${rem.id}/acknowledge`)).status, 200, "once an escalation reached someone, they can take it over");
-  assert.equal(rem.status, "acknowledged");
-  assert.equal(rem.statusReason, rem.statusReason);
-});
-
-test("approved policy: a no-recipient reminder is retried when a manager is mapped and then behaves like any delivered reminder", async () => {
-  approved();
-  regionManagers = regionManagers.filter((m) => m.regionId !== "r1");
-  await runJob(NOW);
-  const rem = reminderOf("tOver");
-  regionManagers.push({ regionId: "r1", userId: "smR1" });
-  await runJob(at(1));
-  assert.equal(rem.status, "sent");
-  assert.equal(rem.escalationLevel, 0);
-  await runJob(at(24));
-  assert.equal(rem.escalationLevel, 0, "24 h after delivery has not passed yet (1 h + 24 h)");
-  await runJob(at(26));
-  assert.equal(rem.escalationLevel, 1);
-});
-
 // ---- R6 audit: an undelivered reminder must not block escalation ------------------------------------------------------
-
-test("R6: a reminder that sends successfully is unchanged - sent, its clock starts at delivery, no escalation before 24 h", async () => {
-  approved();
-  await runJob(NOW);
-  const rem = reminderOf("tOver");
-  assert.deepEqual([rem.status, rem.statusReason, rem.escalationLevel], ["sent", null, 0]);
-  assert.ok(rem.sentAt);
-  await runJob(at(23));
-  assert.equal(rem.escalationLevel, 0);
-});
 
 test("R6: a reminder that fails delivery is recorded as failed with a reason, retried, and never marked sent", async () => {
   approved();
   emailFailFor.add("smR1");
+  emailFailFor.add("rm1"); // every recipient fails: the Service Manager and the Regional Manager
   await runJob(NOW);
   const rem = reminderOf("tOver");
   assert.deepEqual([rem.status, rem.statusReason, rem.sentAt, rem.attempts], ["failed", "delivery_failed", null, 1]);
   assert.ok(reminderEvents.some((e) => e.reminderId === rem.id && e.type === "delivery_failed" && e.channel === "email" && e.detail.attempt === 1), "the failure is recorded for troubleshooting");
-});
-
-test("R6: a reminder that fails repeatedly stops being retried after the limit but is STILL escalated, and the escalation is retried on its own limit", async () => {
-  approved();
-  emailFailFor.add("smR1");
-  for (let i = 0; i < 8; i++) await runJob(at(i)); // the first-line delivery fails every time
-  const rem = reminderOf("tOver");
-  assert.equal(rem.attempts, 5, "first-line retries stop at the existing limit");
-  assert.equal(rem.status, "failed");
-  assert.equal(rem.escalationLevel, 0);
-  await runJob(at(30));
-  assert.equal(rem.escalationLevel, 1, "exhausted retries do not hide it from the next level");
-  assert.equal(rem.attempts, 5, "and the first reminder is not sent again");
-});
-
-test("R6: escalation of an undelivered reminder happens exactly once per level under repeated and simultaneous cron runs", async () => {
-  approved();
-  emailFailFor.add("smR1");
-  await runJob(NOW);
-  const rem = reminderOf("tOver");
-  await Promise.all([runJob(at(30)), runJob(at(30)), runJob(at(30))]);
-  await runJob(at(30));
-  await runJob(at(31));
-  assert.equal(rem.escalationLevel, 1);
-  assert.equal(reminderEvents.filter((e) => e.reminderId === rem.id && e.type === "escalated" && e.level === 1).length, 1, "one escalation event");
-  assert.equal(reminderEvents.filter((e) => e.reminderId === rem.id && e.type === "sent" && e.level === 1 && e.recipientId === "rm1" && e.channel === "email").length, 1, "the Regional Manager was e-mailed once for this reminder");
-  await runJob(at(55));
-  assert.equal(rem.escalationLevel, 2);
-  await runJob(at(200));
-  assert.equal(rem.escalationLevel, 2, "two levels at most");
-});
-
-test("R6: a resolved or closed ticket's undelivered reminder is closed, not escalated", async () => {
-  approved();
-  emailFailFor.add("smR1");
-  await runJob(NOW);
-  const rem = reminderOf("tOver");
-  assert.equal(rem.status, "failed");
-  tickets.tOver.status = "closed";
-  const before = notifications.length;
-  const out = await runJob(at(40));
-  assert.equal(rem.status, "closed");
-  assert.equal(rem.escalationLevel, 0);
-  assert.equal(out.closed >= 1, true);
-  assert.ok(notifications.slice(before).every((n) => n.payload.activityRef !== "TCK-1"), "nothing was sent about a finished ticket");
-  reset();
-  approved();
-  emailFailFor.add("smR1");
-  await runJob(NOW);
-  tickets.tOver.status = "resolved";
-  await runJob(at(40));
-  assert.equal(reminderOf("tOver").status, "closed");
-  assert.equal(reminderOf("tOver").escalationLevel, 0);
-});
-
-test("R6: an acknowledged reminder is not escalated even if its first delivery failed", async () => {
-  approved();
-  emailFailFor.add("smR1");
-  await runJob(NOW);
-  const rem = reminderOf("tOver");
-  rem.acknowledgedAt = at(1); // taken over by hand (for example after an escalation of another stage)
-  rem.status = "acknowledged";
-  await runJob(at(60));
-  assert.equal(rem.escalationLevel, 0);
-});
-
-test("R6: delivery errors on the escalation itself keep the level due and retry it (the provider throwing is a failed attempt, not a crash)", async () => {
-  approved();
-  emailFailFor.add("smR1");
-  await runJob(NOW);
-  const rem = reminderOf("tOver");
-  emailFailFor.add("rm1");
-  const out = await runJob(at(30));
-  assert.equal(rem.escalationLevel, 0, "the level is not consumed while nobody was reached");
-  assert.ok(out.escalationRetryPending >= 1);
-  assert.ok(reminderEvents.some((e) => e.reminderId === rem.id && e.level === 1 && e.type === "delivery_failed"));
-  emailFailFor.clear();
-  await runJob(at(31));
-  assert.equal(rem.escalationLevel, 1);
-});
-
-test("R6: missing or inactive recipients at escalation time are recorded and settle the level without contacting anyone unrelated", async () => {
-  approved();
-  emailFailFor.add("smR1");
-  await runJob(NOW);
-  const rem = reminderOf("tOver");
-  for (const u of Object.values(users) as any[]) if (["rm1", "mgmt", "owner"].includes(u.id)) u.isActive = false;
-  const out = await runJob(at(30));
-  assert.equal(out.escalationNoRecipient >= 1, true);
-  assert.equal(rem.escalationLevel, 1);
-  assert.ok(reminderEvents.some((e) => e.reminderId === rem.id && e.type === "escalation_no_recipient"));
 });
 
 test("approved policy: the reminders-off state and the validated, configurable policy", async () => {
@@ -1309,9 +892,9 @@ test("approved policy: the reminders-off state and the validated, configurable p
   const { PROPOSED_REMINDER_POLICY } = await import("@recd/shared");
   const saved = await call("mgmt", "PUT", "/settings/reminders", PROPOSED_REMINDER_POLICY);
   assert.equal(saved.status, 200);
-  assert.deepEqual([settings.reminderLeadDays, settings.reminderEscalationHours], [2, 24], "the proposed values are accepted through the existing endpoint");
+  assert.deepEqual([settings.reminderLeadDays, settings.reminderEscalationHours], [2, 48], "the approved values are accepted through the existing endpoint");
   dash = await call("smR1", "GET", "/reminders");
-  assert.deepEqual([dash.body.policy.remindersEnabled, dash.body.policy.reminderLeadDays, dash.body.policy.reminderEscalationHours], [true, 2, 24]);
+  assert.deepEqual([dash.body.policy.remindersEnabled, dash.body.policy.reminderLeadDays, dash.body.policy.reminderEscalationHours], [true, 2, 48]);
   assert.equal((await call("mgmt", "PUT", "/settings/reminders", { reminderLeadDays: null, reminderEscalationHours: 24 })).status, 400, "escalation still needs a lead time");
   for (const who of ["smR1", "rm1", "eng", "custA"]) assert.equal((await call(who, "PUT", "/settings/reminders", PROPOSED_REMINDER_POLICY)).status, 403, who);
 });

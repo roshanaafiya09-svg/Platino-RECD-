@@ -149,10 +149,14 @@ export function renderEmail(templateKey: string, data: Record<string, unknown>):
       data.link ? `Open: ${data.link}` : null,
     ].filter((l): l is string => Boolean(l));
     const heading = escalated
-      ? `Reminder not acknowledged - escalation level ${data.level ?? ""}: ${what} needs attention`
+      ? (typeof data.escalationHours === "number"
+          ? `ESCALATION: ${what} is still unresolved ${data.escalationHours} hours after its due date - please follow up`
+          : `ESCALATION: ${what} is still unresolved after its due date - please follow up`)
       : data.overdue
         ? `Overdue: ${what}`
-        : `Due soon: ${what}`;
+        : data.dueToday
+          ? `Due today: ${what}`
+          : `Due soon: ${what}`;
     return {
       subject: `${BRAND} — ${escalated ? "ESCALATED reminder" : "Service reminder"}: ${data.activityRef ?? ""}`,
       text: [heading, "", ...lines, "", "Please acknowledge this reminder in the Platino RECD Tracker."].join("\n"),

@@ -6,6 +6,7 @@ import {
   REGION_MAPPABLE_ROLE_KEYS,
   classifyDue,
   createAmcVisitSchema,
+  dueDayReached,
   escalationDue,
   reminderEligible,
   reminderPolicySchema,
@@ -46,20 +47,22 @@ test("a reminder is created only with a due date AND an approved lead time, and 
   assert.equal(reminderEligible(D("2026-10-10"), now, 3), true);
 });
 
-test("escalation is due only for an unacknowledged, delivered reminder, after the approved time, one level at a time", () => {
-  const sentAt = new Date("2026-10-17T00:00:00Z");
-  const r = { status: "sent", sentAt, acknowledgedAt: null, escalationLevel: 0, lastEscalatedAt: null as Date | null };
-  const at = (h: number) => new Date(sentAt.getTime() + h * 3600 * 1000);
+test("escalation (approved policy): due exactly N hours after the DUE DATE - never from the delivery - for an unacknowledged reminder, once", () => {
+  const due = D("2026-10-17"); // a due date is UTC midnight of that calendar day
+  const r = { status: "sent", dueDate: due, acknowledgedAt: null, escalationLevel: 0 };
+  const at = (h: number) => new Date(due.getTime() + h * 3600 * 1000);
   assert.equal(escalationDue(r, null, at(500)), false, "no escalation time approved");
-  assert.equal(escalationDue(r, 24, at(23)), false);
-  assert.equal(escalationDue(r, 24, at(24)), true);
-  assert.equal(escalationDue({ ...r, acknowledgedAt: at(1) }, 24, at(500)), false, "acknowledged");
-  for (const status of ["pending", "sending", "acknowledged", "closed"]) assert.equal(escalationDue({ ...r, status }, 24, at(500)), false, status); // failed / no_recipient: see the undelivered test below
-  assert.equal(escalationDue({ ...r, sentAt: null }, 24, at(500)), false);
-  const l1 = { ...r, escalationLevel: 1, lastEscalatedAt: at(30) };
-  assert.equal(escalationDue(l1, 24, at(53)), false, "the next level is measured from the last escalation");
-  assert.equal(escalationDue(l1, 24, at(54)), true);
-  assert.equal(escalationDue({ ...l1, escalationLevel: MAX_REMINDER_ESCALATION_LEVEL }, 24, at(900)), false, "two levels at most");
+  assert.equal(escalationDue(r, 0, at(500)), false);
+  assert.equal(escalationDue(r, 48, at(-24)), false, "before the due date");
+  assert.equal(escalationDue(r, 48, at(47)), false);
+  assert.equal(escalationDue({ ...r, dueDate: due }, 48, new Date(due.getTime() + 48 * 3600 * 1000 - 1)), false, "one millisecond short of 48 hours");
+  assert.equal(escalationDue(r, 48, at(48)), true, "exactly 48 hours after the due date");
+  assert.equal(escalationDue(r, 48, at(500)), true, "and every run after it until it has been delivered");
+  assert.equal(escalationDue({ ...r, dueDate: due.toISOString() }, 48, at(48)), true, "a due date given as text works the same");
+  assert.equal(escalationDue({ ...r, dueDate: "garbage" }, 48, at(500)), false);
+  assert.equal(escalationDue({ ...r, acknowledgedAt: at(1) }, 48, at(500)), false, "acknowledged");
+  for (const status of ["pending", "sending", "acknowledged", "closed"]) assert.equal(escalationDue({ ...r, status }, 48, at(500)), false, status);
+  assert.equal(escalationDue({ ...r, escalationLevel: MAX_REMINDER_ESCALATION_LEVEL }, 48, at(900)), false, "a single escalation: once it has been delivered it is never due again");
 });
 
 test("both Service Managers and Regional Managers can be mapped to a region - nobody else", () => {
@@ -87,10 +90,11 @@ test("reminder policy: empty = off; values are bounded", () => {
   assert.equal(reminderPolicySchema.safeParse({}).success, false, "both fields must be stated, so switching off is deliberate");
 });
 
-test("the proposed workflow (2 days, 24 hours) is a valid policy, but it is only a proposal: the stored default stays OFF", () => {
+test("the approved workflow (2 days, 48 hours after the due date) is a valid policy, but it is only pre-filled in Settings: the stored default stays OFF", () => {
   assert.equal(PROPOSED_REMINDER_POLICY.reminderLeadDays, 2, "the proposed / default lead time is 2 days before the due date");
-  assert.equal(PROPOSED_REMINDER_POLICY.reminderEscalationHours, 24, "the escalation timing is unchanged");
-  assert.deepEqual({ ...PROPOSED_REMINDER_POLICY }, { reminderLeadDays: 2, reminderEscalationHours: 24 });
+  assert.equal(PROPOSED_REMINDER_POLICY.reminderEscalationHours, 48, "escalation 48 hours after the due date");
+  assert.deepEqual({ ...PROPOSED_REMINDER_POLICY }, { reminderLeadDays: 2, reminderEscalationHours: 48 });
+  assert.equal(MAX_REMINDER_ESCALATION_LEVEL, 1, "a single escalation");
   assert.equal(reminderPolicySchema.safeParse(PROPOSED_REMINDER_POLICY).success, true);
   assert.deepEqual({ ...REMINDER_POLICY_DEFAULTS }, { reminderLeadDays: null, reminderEscalationHours: null });
 });
@@ -107,26 +111,29 @@ test("the proposed lead time: eligible from 2 calendar days before the due date,
   assert.equal(reminderEligible(due, at("2026-10-19T00:00:00.000Z"), null), false, "policy off: never");
 });
 
-test("escalationDue: an undelivered (failed / no recipient) reminder escalates after the same hours, counted from creation; a delivered one still counts from delivery", () => {
-  const H = 3600 * 1000;
-  const t0 = new Date("2026-01-01T00:00:00Z");
-  const at = (h: number) => new Date(t0.getTime() + h * H);
-  const base = { acknowledgedAt: null, escalationLevel: 0, lastEscalatedAt: null, createdAt: t0 };
-  for (const status of ["failed", "no_recipient"]) {
-    const r = { ...base, status, sentAt: null };
-    assert.equal(escalationDue(r, 24, at(23)), false, `${status}: too early`);
-    assert.equal(escalationDue(r, 24, at(24)), true, `${status}: due, although never delivered`);
-    assert.equal(escalationDue({ ...r, escalationLevel: 1, lastEscalatedAt: at(30) }, 24, at(53)), false, `${status}: level 2 counts from level 1`);
-    assert.equal(escalationDue({ ...r, escalationLevel: 1, lastEscalatedAt: at(30) }, 24, at(54)), true);
-    assert.equal(escalationDue({ ...r, escalationLevel: 2 }, 24, at(500)), false, "two levels at most");
-    assert.equal(escalationDue({ ...r, acknowledgedAt: at(1) }, 24, at(500)), false, "acknowledged");
+test("escalationDue: a reminder whose delivery failed (failed / no recipient) is escalated at the same moment - the due date is the only clock; an attempted escalation stays due", () => {
+  const due = D("2026-01-01");
+  const at = (h: number) => new Date(due.getTime() + h * 3600 * 1000);
+  const base = { acknowledgedAt: null, escalationLevel: 0, dueDate: due };
+  for (const status of ["sent", "failed", "no_recipient"]) {
+    const r = { ...base, status };
+    assert.equal(escalationDue(r, 48, at(47)), false, status + ": too early");
+    assert.equal(escalationDue(r, 48, at(48)), true, status + ": due, whether or not the first reminder was ever delivered");
+    assert.equal(escalationDue(r, 24, at(24)), true, status + ": the hours are the configured value, not a fixed 48");
+    assert.equal(escalationDue({ ...r, acknowledgedAt: at(1) }, 48, at(500)), false, "acknowledged");
     assert.equal(escalationDue(r, null, at(500)), false, "policy off");
-    assert.equal(escalationDue({ ...r, createdAt: null }, 24, at(500)), false, "no clock to count from");
   }
-  const sent = { ...base, status: "sent", sentAt: at(10) };
-  assert.equal(escalationDue(sent, 24, at(33)), false, "24 h run from the delivery, not from creation");
-  assert.equal(escalationDue(sent, 24, at(34)), true);
-  assert.equal(escalationDue({ ...sent, sentAt: null }, 24, at(500)), false, "a 'sent' reminder without a delivery time is not escalated");
-  for (const status of ["pending", "sending", "acknowledged", "closed"]) assert.equal(escalationDue({ ...base, status, sentAt: null }, 24, at(500)), false, status);
-  assert.equal(escalationDue({ ...base, status: "sent", sentAt: at(40), escalationAttempts: 1 }, 24, at(41)), true, "a level that was already attempted stays due until delivered");
+  assert.equal(escalationDue({ ...base, status: "sent", escalationAttempts: 1 }, 48, at(1)), true, "an escalation that was already attempted (its delivery failed) stays due until delivered");
+});
+
+test("dueDayReached: today (UTC) is the due date or later - the day the due-date reminder and every daily reminder after it go out", () => {
+  const due = D("2026-10-20");
+  assert.equal(dueDayReached(due, new Date("2026-10-19T23:59:59Z")), false, "the day before");
+  assert.equal(dueDayReached(due, new Date("2026-10-20T00:00:00Z")), true, "the due date itself, from its first moment");
+  assert.equal(dueDayReached(due, new Date("2026-10-20T23:59:59Z")), true, "and until its last");
+  assert.equal(dueDayReached(due, new Date("2026-10-27T04:00:00Z")), true, "any later day");
+  assert.equal(dueDayReached("2026-10-20T00:00:00.000Z", new Date("2026-10-20T04:00:00Z")), true, "a due date given as text");
+  assert.equal(dueDayReached(null, new Date()), false);
+  assert.equal(dueDayReached(undefined, new Date()), false);
+  assert.equal(dueDayReached("garbage", new Date()), false);
 });

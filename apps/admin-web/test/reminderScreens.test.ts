@@ -104,18 +104,15 @@ import { MAX_DELIVERY_ATTEMPTS } from "@recd/shared";
 import { attemptSuffix, escalationInfo } from "../src/lib/reminderUi";
 import { friendlyApiMessage } from "../src/lib/apiError";
 
-test("escalation line: nothing attempted yet, off, retrying, exhausted, and delivered - all from the API's own values", () => {
+test("escalation line (single escalation): nothing attempted yet, off, retrying, exhausted, and delivered - all from the API's own values", () => {
   const sent = { status: "sent", escalationLevel: 0, escalationAttempts: 0 };
   assert.equal(escalationInfo(sent, 24)?.text, "No escalation attempted yet");
   assert.equal(escalationInfo(sent, null)?.text, "Escalation is off");
   assert.equal(escalationInfo({ ...sent, escalationAttempts: 3 }, 24)?.text, `Escalation retrying - level 1: 3 of ${MAX_DELIVERY_ATTEMPTS} attempts failed`);
   assert.match(escalationInfo({ ...sent, escalationAttempts: MAX_DELIVERY_ATTEMPTS }, 24)?.text ?? "", /Escalation attempt limit reached - level 1: 5 of 5 attempts failed, no more retries/);
-  // level 1 delivered, level 2 now retrying
-  assert.equal(escalationInfo({ status: "sent", escalationLevel: 1, escalationAttempts: 2 }, 24)?.text, `Escalation level 1 delivered. Escalation retrying - level 2: 2 of ${MAX_DELIVERY_ATTEMPTS} attempts failed`);
-  // a level that was simply delivered is stated by the existing "Escalated to level N" line
-  assert.equal(escalationInfo({ status: "sent", escalationLevel: 1, escalationAttempts: 0 }, 24), null);
-  assert.match(escalationInfo({ status: "sent", escalationLevel: 2, escalationAttempts: 0 }, 24)?.text ?? "", /level 2 delivered - last level reached/);
-  assert.equal(escalationInfo({ status: "sent", escalationLevel: 1, escalationAttempts: 0 }, 24, 5), null);
+  // the approved policy has ONE escalation: once it is delivered it is the last level, and nothing further is attempted
+  assert.match(escalationInfo({ status: "sent", escalationLevel: 1, escalationAttempts: 0 }, 48)?.text ?? "", /level 1 delivered - last level reached/);
+  assert.match(escalationInfo({ status: "sent", escalationLevel: 1, escalationAttempts: 2 }, 48)?.text ?? "", /last level reached/);
 });
 
 test("escalation line: only for reminders it applies to, and no value is invented when the API did not send an attempt count", () => {
@@ -172,9 +169,12 @@ test("friendly errors: a network failure or a server error becomes one clear sen
   assert.match(dash, /Unable to load reminders\. Please try again\./);
 });
 
-test("settings: the proposed workflow (2 days, 24 h per stage) is shown for review and only FILLS the boxes - saving stays a separate, deliberate step", () => {
+test("settings: the approved workflow (2 days before, due date, daily, escalation 48 h after the due date) is shown and only FILLS the boxes - saving stays a separate, deliberate step", () => {
   assert.match(settingsComp, /data-testid="reminder-proposed-policy"/);
-  assert.match(settingsComp, /Proposed workflow \(for mentor review - not active\)/);
+  assert.match(settingsComp, /Approved workflow \(not active until saved below\)/);
+  assert.match(settingsComp, /Another reminder on the due date, then one every day until the ticket is resolved or closed/);
+  assert.match(settingsComp, /hours after the due date: escalate once to the region&apos;s Regional Managers/);
+  assert.match(settingsComp, /Escalation only notifies - the ticket is not changed/);
   assert.match(settingsComp, /PROPOSED_REMINDER_POLICY\.reminderLeadDays/);
   assert.match(settingsComp, /PROPOSED_REMINDER_POLICY\.reminderEscalationHours/);
   assert.match(settingsComp, /data-testid="reminder-fill-proposed"/);

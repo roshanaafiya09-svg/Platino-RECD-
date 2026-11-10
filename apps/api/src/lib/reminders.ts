@@ -8,15 +8,21 @@
  *
  * POLICY (CompanySettings, both NULL = off until the business approves values):
  *   - reminderLeadDays: a reminder is created and sent once an activity is due within this many days, or overdue.
- *   - reminderEscalationHours: a reminder nobody acknowledged is escalated after this many hours (twice, one level at a time).
+ *   - reminderEscalationHours: an activity still unresolved this many hours AFTER ITS DUE DATE (approved policy: 48) is escalated, once.
  *   With the lead time unset the job sends NOTHING (it still tidies up reminders of finished activities).
  *
- * WHO IS TOLD (defaults documented in docs/HANDOVER.md, to be confirmed by the mentor):
- *   first reminder  -> the ACTIVE Service Managers mapped to the activity's region; if the region has none, its active
- *                      Regional Managers; if neither (or the activity has no region) the reminder is "no recipient" - it is
- *                      shown on the dashboard and retried on every run, and is never sent to anyone unrelated.
- *   escalation 1    -> the region's active Regional Managers who have not already had the reminder; if there are none, Management.
- *   escalation 2    -> Management (management and owner/admin roles).
+ * SCHEDULE (approved R6 policy): the first reminder goes out 2 calendar days before the due date (reminderLeadDays); another on the due date
+ * itself; then one every day after it, until the activity is resolved / closed / archived (or somebody acknowledges the reminder). Days are
+ * UTC calendar days and the job runs once a day. Escalation: once, reminderEscalationHours (48) after the DUE DATE - measured from the due date
+ * (stored as UTC midnight), never from the time a reminder was delivered - the responsible Regional Managers are notified. Escalation only
+ * notifies: it never changes or closes the activity.
+ *
+ * WHO IS TOLD (the "region's managers" mapping, i.e. RegionManager rows; there is no per-ticket or per-site manager and no reporting hierarchy):
+ *   reminders  -> the ticket's assigned engineer (Complaint.assignedToId, tickets only) + the region's ACTIVE Regional Managers + the region's
+ *                 ACTIVE Service Managers (de-duplicated). With none of them the reminder is "no recipient": it is shown on the dashboard and
+ *                 retried on every run, and is never sent to anyone unrelated.
+ *   escalation -> the region's ACTIVE Regional Managers (all of them, including those who already had the reminders - they need to act); if
+ *                 the region has none (or the activity has no region), Management (management and owner/admin roles).
  *
  * WHAT "DELIVERED" MEANS: only an accepted e-mail. The in-app channel writes a NotificationLog row that no screen or API reads,
  * so it is recorded (event `in_app_recorded`) but never counted as delivery. With no SMTP configured nothing is delivered and
@@ -29,13 +35,13 @@
  * (`escalationLevel`) only once that level was delivered to all its recipients (or had nobody to tell); until then the level is
  * retried on later runs, up to MAX_DELIVERY_ATTEMPTS, under a lease (`escalationClaimedAt`) that overlapping runs respect.
  *
- * DAILY OVERDUE REMINDERS: once the due date has passed (a whole calendar day, UTC) a reminder that was delivered and is still
- * unacknowledged is sent again to the same first-line recipients, once per UTC day, until the activity is finished / archived /
+ * DUE-DAY AND DAILY OVERDUE REMINDERS: from the due date itself (UTC calendar day) a reminder that was delivered and is still
+ * unacknowledged is sent again to the same recipients, once per UTC day, until the activity is finished / archived /
  * has no due date (housekeeping closes the reminder) or somebody acknowledges it. The once-per-day guarantee is a conditional
  * update of `lastAttemptAt` (claimed only if it is before today 00:00 UTC), so two runs - or a retry - cannot send the same day
  * twice; each delivery is recorded per recipient with `repeat_*` events carrying `detail.day`. A recipient who already got today's
  * message is skipped on a same-day retry, and one who failed MAX_DELIVERY_ATTEMPTS times today is left until tomorrow. Escalation
- * clocks are untouched: `sentAt` (the first delivery) and `lastEscalatedAt` still drive them. A reminder whose FIRST delivery failed
+ * clock is the due date (`sentAt` no longer drives escalation). A reminder whose FIRST delivery failed
  * (or had no recipient) and has used up its MAX_DELIVERY_ATTEMPTS keeps its status and attempt count (the existing retry rules are
  * unchanged) but still gets the daily overdue reminder through the same repeat path, so an overdue activity is never silent.
  *
@@ -46,6 +52,7 @@
 import { Prisma } from "@prisma/client";
 import {
   MAX_DELIVERY_ATTEMPTS,
+  MAX_REMINDER_ESCALATION_LEVEL,
   REMINDER_ACTIVITY,
   REMINDER_EVENT,
   REMINDER_STATUS,
@@ -54,6 +61,7 @@ import {
   TICKET_FINISHED_STATUSES,
   AMC_VISIT_STATUS,
   classifyDue,
+  dueDayReached,
   escalationDue,
   ESCALATABLE_REMINDER_STATUSES,
   UNDELIVERED_REMINDER_STATUSES,
@@ -98,6 +106,36 @@ export async function firstLineRecipients(regionId: string | null): Promise<Reci
   return { ids: [], reason: "no_active_manager" };
 }
 
+/**
+ * Who a REMINDER goes to (approved R6 policy): the ticket's assigned engineer, plus the region's active Regional Managers and Service Managers.
+ * An AMC visit has no assignee, so it reaches the region's managers only. Ids are de-duplicated; inactive users are never included.
+ */
+export async function reminderRecipients(regionId: string | null, assignedToId: string | null): Promise<Recipients> {
+  const ids = new Set<string>();
+  if (assignedToId) {
+    const engineer = await prisma.user.findFirst({ where: { id: assignedToId, isActive: true }, select: { id: true } });
+    if (engineer) ids.add(engineer.id);
+  }
+  if (regionId) {
+    const m = await mappedManagers(regionId);
+    for (const id of [...m.regionalManagers, ...m.serviceManagers]) ids.add(id);
+  }
+  if (ids.size) return { ids: [...ids] };
+  return { ids: [], reason: regionId ? "no_active_manager" : "no_region" };
+}
+
+/** The assignee of a reminder's ticket (null for an AMC visit or an unassigned ticket). */
+async function assigneeOf(complaintId: string | null): Promise<string | null> {
+  if (!complaintId) return null;
+  return (await prisma.complaint.findUnique({ where: { id: complaintId }, select: { assignedToId: true } }))?.assignedToId ?? null;
+}
+
+/** The activity's CURRENT due date if it is still open (it may have been moved or finished since the reminder was made), else null. */
+function liveDueDate(r: { complaint: { status: string; dueDate: Date | null; archivedAt: Date | null } | null; amcVisit: { status: string; dueDate: Date } | null }): Date | null {
+  if (r.complaint) return TICKET_FINISHED_STATUSES.includes(r.complaint.status) || r.complaint.archivedAt ? null : r.complaint.dueDate;
+  return r.amcVisit && r.amcVisit.status === AMC_VISIT_STATUS.SCHEDULED ? r.amcVisit.dueDate : null;
+}
+
 async function managementRecipients(): Promise<Recipients> {
   const users = await prisma.user.findMany({
     where: { isActive: true, role: { key: { in: [ROLE_KEY.MANAGEMENT, ROLE_KEY.OWNER_ADMIN] } } },
@@ -106,11 +144,11 @@ async function managementRecipients(): Promise<Recipients> {
   return users.length ? { ids: users.map((u) => u.id) } : { ids: [], reason: "no_management" };
 }
 
-async function escalationRecipients(level: number, regionId: string | null, alreadyNotified: Set<string>): Promise<Recipients> {
-  if (level === 1 && regionId) {
+/** The responsible managers for an escalation: ALL the region's active Regional Managers; Management when the region has none. */
+async function escalationRecipients(regionId: string | null): Promise<Recipients> {
+  if (regionId) {
     const m = await mappedManagers(regionId);
-    const fresh = m.regionalManagers.filter((id) => !alreadyNotified.has(id));
-    if (fresh.length) return { ids: [...new Set(fresh)] };
+    if (m.regionalManagers.length) return { ids: [...new Set(m.regionalManagers)] };
   }
   return managementRecipients();
 }
@@ -346,7 +384,7 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
     });
     if (claimed.count !== 1) continue; // another run owns it
     const r = await prisma.serviceReminder.findUniqueOrThrow({ where: { id } });
-    const recipients = await firstLineRecipients(r.regionId);
+    const recipients = await reminderRecipients(r.regionId, await assigneeOf(r.complaintId));
     if (!recipients.ids.length) {
       await prisma.serviceReminder.update({ where: { id }, data: { status: REMINDER_STATUS.NO_RECIPIENT, statusReason: recipients.reason ?? "no_active_manager" } });
       await prisma.serviceReminderEvent.create({ data: { reminderId: id, type: REMINDER_EVENT.NO_RECIPIENT, detail: { reason: recipients.reason } } });
@@ -369,14 +407,12 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
   //     once per UTC day. The claim (lastAttemptAt before today 00:00 UTC -> now) is atomic, so overlapping runs cannot both send.
   const overdueSent = await prisma.serviceReminder.findMany({
     where: { OR: [{ status: REMINDER_STATUS.SENT }, { status: { in: UNDELIVERED_REMINDER_STATUSES }, attempts: { gte: MAX_DELIVERY_ATTEMPTS } }], acknowledgedAt: null, closedAt: null, lastAttemptAt: { lt: todayStart } },
-    include: { complaint: { select: { status: true, dueDate: true, archivedAt: true } }, amcVisit: { select: { status: true, dueDate: true } } },
+    include: { complaint: { select: { status: true, dueDate: true, archivedAt: true, assignedToId: true } }, amcVisit: { select: { status: true, dueDate: true } } },
   });
   for (const r of overdueSent) {
-    // The live activity decides: its CURRENT due date (it may have been moved) and that it is still open.
-    const live = r.complaint
-      ? TICKET_FINISHED_STATUSES.includes(r.complaint.status) || r.complaint.archivedAt ? null : r.complaint.dueDate
-      : r.amcVisit && r.amcVisit.status === AMC_VISIT_STATUS.SCHEDULED ? r.amcVisit.dueDate : null;
-    if (!live || classifyDue(live, now, null) !== "overdue") continue;
+    // The live activity decides: its CURRENT due date (it may have been moved) and that it is still open. Today must be the due date or later.
+    const live = liveDueDate(r);
+    if (!live || !dueDayReached(live, now)) continue;
     const claimed = await prisma.serviceReminder.updateMany({
       where: { id: r.id, status: r.status, attempts: r.attempts, acknowledgedAt: null, closedAt: null, lastAttemptAt: { lt: todayStart } },
       data: { lastAttemptAt: now },
@@ -385,7 +421,7 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
     const release = () => prisma.serviceReminder.updateMany({ where: { id: r.id, lastAttemptAt: now }, data: { lastAttemptAt: r.lastAttemptAt } });
     const day = dateOnly(now);
     const daysOverdue = Math.floor((now.getTime() - live.getTime()) / DAY_MS);
-    const recipients = await firstLineRecipients(r.regionId);
+    const recipients = await reminderRecipients(r.regionId, r.complaint?.assignedToId ?? null);
     if (!recipients.ids.length) {
       const already = await prisma.serviceReminderEvent.count({ where: { reminderId: r.id, type: REMINDER_EVENT.REPEAT_NO_RECIPIENT, detail: { path: ["day"], equals: day } } });
       if (!already) await prisma.serviceReminderEvent.create({ data: { reminderId: r.id, type: REMINDER_EVENT.REPEAT_NO_RECIPIENT, detail: { reason: recipients.reason, day } } });
@@ -393,7 +429,7 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
       result.repeatNoRecipient++;
       continue;
     }
-    const out = await deliver(r.id, 0, recipients.ids, "service_reminder", messageData({ ...r, dueDate: live }, now, { daysOverdue, repeat: true }), 1, day);
+    const out = await deliver(r.id, 0, recipients.ids, "service_reminder", messageData({ ...r, dueDate: live }, now, { daysOverdue, repeat: true, dueToday: dateOnly(live) === day }), 1, day);
     if (out.pending.length === 0) result.repeated++;
     else {
       if (out.retryable.length) await release(); // the rest is retried by a later run today (those already delivered are skipped)
@@ -401,13 +437,19 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
     }
   }
 
-  // 4. Escalate unacknowledged reminders (only when an escalation time has been approved). escalationLevel advances only once
-  //    the level was DELIVERED (or had nobody to tell); a failed level stays due and is retried (up to MAX_DELIVERY_ATTEMPTS).
+  // 4. Escalate (once) unacknowledged reminders whose activity is STILL unresolved reminderEscalationHours after its DUE DATE (only when an escalation
+  //    time has been approved). escalationLevel advances only once the escalation was DELIVERED (or had nobody to tell); a failed one stays due and is
+  //    retried (up to MAX_DELIVERY_ATTEMPTS). It only notifies - the activity is never changed.
   if (escalationHours != null) {
     // Delivered reminders AND undelivered ones (failed / no recipient): a failed delivery must not stop an overdue activity from being escalated.
-    const sent = await prisma.serviceReminder.findMany({ where: { status: { in: ESCALATABLE_REMINDER_STATUSES }, acknowledgedAt: null, escalationLevel: { lt: 2 }, closedAt: null } });
+    const sent = await prisma.serviceReminder.findMany({
+      where: { status: { in: ESCALATABLE_REMINDER_STATUSES }, acknowledgedAt: null, escalationLevel: { lt: MAX_REMINDER_ESCALATION_LEVEL }, closedAt: null },
+      include: { complaint: { select: { status: true, dueDate: true, archivedAt: true } }, amcVisit: { select: { status: true, dueDate: true } } },
+    });
     for (const r of sent) {
-      if (!escalationDue(r, escalationHours, now)) continue;
+      // The live activity decides: still open, and its CURRENT due date is the clock (never the time a reminder was delivered).
+      const live = liveDueDate(r);
+      if (!live || !escalationDue({ ...r, dueDate: live }, escalationHours, now)) continue;
       if ((r.escalationAttempts ?? 0) >= MAX_DELIVERY_ATTEMPTS) continue;
       const level = r.escalationLevel + 1;
       // Lease the attempt: a parallel run that got here first leaves count 0 (its lease is fresh), so only one run delivers.
@@ -420,9 +462,7 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
       });
       if (claimed.count !== 1) continue;
       const attempt = (r.escalationAttempts ?? 0) + 1;
-      // Who already had the ORIGINAL reminder (level 0) - never this level's own earlier deliveries, so a retry picks the same people.
-      const notified = new Set((await prisma.serviceReminderEvent.findMany({ where: { reminderId: r.id, type: REMINDER_EVENT.SENT, level: 0 }, select: { recipientId: true } })).map((e) => e.recipientId as string));
-      const recipients = await escalationRecipients(level, r.regionId, notified);
+      const recipients = await escalationRecipients(r.regionId);
       const completeLevel = () => prisma.serviceReminder.updateMany({
         where: { id: r.id, escalationLevel: r.escalationLevel },
         data: { escalationLevel: level, lastEscalatedAt: now, escalationClaimedAt: null, escalationAttempts: 0 },
@@ -433,7 +473,7 @@ export async function runReminderJob(now: Date = new Date()): Promise<ReminderJo
         result.escalationNoRecipient++;
         continue;
       }
-      const out = await deliver(r.id, level, recipients.ids, "service_reminder_escalated", messageData(r, now, { level }), attempt);
+      const out = await deliver(r.id, level, recipients.ids, "service_reminder_escalated", messageData({ ...r, dueDate: live }, now, { level, escalationHours }), attempt);
       if (out.pending.length === 0) {
         await prisma.serviceReminderEvent.create({ data: { reminderId: r.id, type: REMINDER_EVENT.ESCALATED, level, detail: { recipients: recipients.ids.length, attempt } } });
         await completeLevel();
