@@ -27,7 +27,7 @@ export function normalizeIndianMobile(input: string): string | null {
 export const INDIAN_MOBILE_MESSAGE = "Enter a valid 10-digit Indian mobile number";
 
 export const indianMobileSchema = z
-  .string({ required_error: INDIAN_MOBILE_MESSAGE, invalid_type_error: INDIAN_MOBILE_MESSAGE })
+  .string({ error: INDIAN_MOBILE_MESSAGE })
   .transform((v, ctx) => {
     const n = normalizeIndianMobile(v);
     if (!n) {

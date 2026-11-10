@@ -13,7 +13,7 @@ export const COMPLAINT_STATUS_VALUES = Object.values(COMPLAINT_STATUS) as [strin
 
 /** Only the nine existing statuses are accepted; anything else is a validation error (never stored). */
 export const complaintStatusSchema = z.enum(COMPLAINT_STATUS_VALUES as [string, ...string[]], {
-  errorMap: () => ({ message: `Status must be one of: ${COMPLAINT_STATUS_VALUES.join(", ")}` }),
+  error: `Status must be one of: ${COMPLAINT_STATUS_VALUES.join(", ")}`,
 });
 
 export const isComplaintStatus = (s: unknown): s is string => typeof s === "string" && COMPLAINT_STATUS_VALUES.includes(s);

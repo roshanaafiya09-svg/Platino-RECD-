@@ -105,7 +105,15 @@ export const createAmcServiceReportSchema = serviceReportFieldsSchema.extend({
   acknowledgementRequired: z.boolean().default(true),
 });
 
-export const updateServiceReportSchema = serviceReportFieldsSchema.partial().extend({
+// NOTE: spelled out (not serviceReportFieldsSchema.partial()) on purpose. In zod 4, .partial() applies a field's .default("") when the key is
+// absent, so a PATCH that sends only one field would silently blank the others. Here an absent key stays absent and is simply not changed.
+export const updateServiceReportSchema = z.object({
+  visitDate: visitDateSchema.optional(),
+  workPerformed: trimmedText.optional(),
+  findings: trimmedText.optional(),
+  resolution: trimmedText.optional(),
+  partsUsed: trimmedText.optional(),
+  remarks: trimmedText.optional(),
   /** AMC reports only (refused for ticket reports): change the acknowledgement rule while still a draft. */
   acknowledgementRequired: z.boolean().optional(),
   /** The version the editor loaded; a stale edit is refused instead of overwriting newer work. */
@@ -131,7 +139,7 @@ export const signServiceReportSchema = z.object({
   /** The version of the report the customer reviewed. Signing a different (edited) version is refused. */
   version: z.number().int().positive(),
   /** The customer ticked "I have reviewed this report and approve it". */
-  confirm: z.literal(true, { errorMap: () => ({ message: "Confirm that you have reviewed the report" }) }),
+  confirm: z.literal(true, { error: "Confirm that you have reviewed the report" }),
 });
 
 export interface ServiceReportContent {
