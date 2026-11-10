@@ -25,8 +25,18 @@ export default tseslint.config(
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
   {
+    // Tests and developer scripts only: test doubles are routinely typed loosely, and some tests load a module fresh with require() after changing
+    // process.env (an import would be hoisted above the change). Production code under src/ keeps both rules.
+    files: ["test/**/*.ts", "scripts/**/*.ts"],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
+  {
     // Plain Node scripts (CommonJS) are allowed to use require().
     files: ["**/*.js", "**/*.cjs"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
     languageOptions: { sourceType: "commonjs", globals: { require: "readonly", module: "writable", process: "readonly", console: "readonly", __dirname: "readonly" } },
   },
 );

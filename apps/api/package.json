@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "prisma generate && tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "lint": "eslint src",
+    "lint": "eslint src test scripts",
     "test": "tsx --test test/*.test.ts",
     "test:db": "tsx --test --test-concurrency=1 test/db/*.test.ts",
     "postinstall": "prisma generate",

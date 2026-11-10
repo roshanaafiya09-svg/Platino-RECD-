@@ -10,10 +10,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const P = PERMISSION_KEY;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";const P = PERMISSION_KEY;
 type U = { id: string; role: string; perms: string[]; customerId?: string; vendorId?: string };
 const users: Record<string, U> = {
   mgmt: { id: "mgmt", role: ROLE_KEY.MANAGEMENT, perms: [P.CHANGE_SITE_STATUS, P.VIEW_SITE_STATUS] },

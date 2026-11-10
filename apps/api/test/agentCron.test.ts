@@ -8,10 +8,7 @@ import test, { before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import express from "express";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const TEST_SECRET = "unit-test-cron-secret";
+import express from "express";const TEST_SECRET = "unit-test-cron-secret";
 let deleteCalls: any[] = [];
 let server: Server;
 let base = "";

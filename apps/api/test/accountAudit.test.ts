@@ -13,10 +13,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const P = PERMISSION_KEY;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";const P = PERMISSION_KEY;
 interface U { id: string; name: string; email: string | null; phone: string | null; roleKey: string; customerId: string | null; vendorId: string | null; isActive: boolean; tokenVersion: number; passwordHash: string | null }
 interface A { id: string; actorId: string | null; targetUserId: string | null; targetIdRecorded: string | null; targetName: string | null; action: string; changes: any }
 
@@ -24,7 +21,6 @@ let users: U[] = [];
 let audit: A[] = [];
 let customers: any[] = [];
 let vendors: any[] = [];
-let sites: any[] = [];
 let failAudit = false;
 let seq = 1;
 const txUndo = new AsyncLocalStorage<Array<() => void>>();
@@ -166,7 +162,7 @@ before(async () => {
 after(() => { server?.close(); });
 
 beforeEach(() => {
-  users = []; audit = []; customers = []; vendors = []; sites = []; failAudit = false; seq = 1;
+  users = []; audit = []; customers = []; vendors = []; failAudit = false; seq = 1;
 });
 
 async function call(method: string, path: string, body?: unknown) {

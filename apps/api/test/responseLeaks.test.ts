@@ -16,10 +16,7 @@ import type { Server } from "node:http";
 import express from "express";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
 import { allKeys, shape } from "./helpers/prismaShape";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const P = PERMISSION_KEY;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";const P = PERMISSION_KEY;
 
 // ---- values that must never reach a customer or vendor (and, for credentials, nobody) ----------------------------------------------------
 const SECRET_HASH = "$2a$10$SECRETHASHVALUEnotforanyone";

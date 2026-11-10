@@ -14,10 +14,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import express from "express";
 import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const P = PERMISSION_KEY;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";const P = PERMISSION_KEY;
 const users: Record<string, { id: string; role: string; perms: string[]; vendorId?: string; isActive?: boolean }> = {
   svc: { id: "svc", role: ROLE_KEY.SERVICE_TEAM, perms: [P.MANAGE_COMPLAINTS] },
   rmN: { id: "rmN", role: ROLE_KEY.REGIONAL_MANAGER, perms: [P.MANAGE_COMPLAINTS, P.VIEW_COMPLAINTS_OVERVIEW] },
@@ -281,7 +278,7 @@ test("delete ARCHIVES: nothing is deleted, the archive is recorded (who, when, s
 
 test("an archived ticket cannot be changed or reassigned, but its history stays readable to those who may read it", async () => {
   const t = ticket({ assignedToId: "eng" });
-  const live = ticket();
+  ticket();
   await call("svc", "DELETE", `/complaints/${t.id}`);
   for (const who of ["svc", "eng"]) {
     const r = await call(who, "PATCH", `/complaints/${t.id}`, { status: "closed" });

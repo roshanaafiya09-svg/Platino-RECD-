@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * `authenticate` reads the account, its role key and its permission keys with ONE hand-written SQL statement (middleware/auth.ts). The unit
  * tests in this folder have no database: they describe their users through a stubbed `prisma.user.findUnique` that returns the user with

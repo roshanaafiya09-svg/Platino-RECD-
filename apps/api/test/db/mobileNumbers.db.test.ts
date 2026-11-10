@@ -31,10 +31,7 @@ function pointsAtIsolatedDb(raw: string | undefined): boolean {
 const isolated = pointsAtIsolatedDb(process.env.DATABASE_URL) && pointsAtIsolatedDb(process.env.DIRECT_URL) && !!process.env.JWT_SECRET;
 const skip = isolated
   ? false
-  : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test), or JWT_SECRET is missing - refusing to touch any database";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-describe("mobile-number rules against the real test database", { skip }, () => {
+  : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test), or JWT_SECRET is missing - refusing to touch any database";describe("mobile-number rules against the real test database", { skip }, () => {
   const PREFIX = `ZM${Date.now().toString(36).toUpperCase()}`;
   const tracked = { customerIds: new Set<string>(), vendorIds: new Set<string>(), orderIds: new Set<string>(), userIds: new Set<string>(), phones: new Set<string>() };
   let seq = 0;
@@ -532,20 +529,6 @@ describe("mobile-number rules against the real test database", { skip }, () => {
   // OTP security against the real tables
   // ------------------------------------------------------------------------------------------
 
-  /** Runs fn with NODE_ENV=production (awaited), then puts the development value back. */
-  async function inProduction<T>(fn: () => Promise<T>): Promise<T> {
-    const saved = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
-    try { return await fn(); } finally { process.env.NODE_ENV = saved; }
-  }
-  /** Everything the server writes to its log while fn runs. */
-  async function captureLogs<T>(fn: () => Promise<T>): Promise<{ result: T; logged: string }> {
-    const lines: string[] = [];
-    const saved = { log: console.log, error: console.error, warn: console.warn };
-    const grab = (...a: unknown[]) => { lines.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")); };
-    console.log = grab; console.error = grab; console.warn = grab;
-    try { return { result: await fn(), logged: lines.join("\n") }; } finally { Object.assign(console, saved); }
-  }
   async function makeStaff(tag: string, isActive = true, roleKey = "service_engineer") {
     const role = await prisma.role.findUniqueOrThrow({ where: { key: roleKey } });
     const phone = newPhone();

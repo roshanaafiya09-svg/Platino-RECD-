@@ -15,10 +15,7 @@ import type { Server } from "node:http";
 import express from "express";
 import bcrypt from "bcryptjs";
 import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const PASSWORD = "Temp-Passw0rd!";
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";const PASSWORD = "Temp-Passw0rd!";
 const NEW_PASSWORD = "Brand-New-Passw0rd!";
 const HASH = bcrypt.hashSync(PASSWORD, 4);
 

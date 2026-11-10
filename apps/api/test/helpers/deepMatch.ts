@@ -1,8 +1,6 @@
 // A small interpreter for the Prisma "where" shapes used by the reminder code, so mocked tests run the real query intent
 // against in-memory rows: equality, null, { not, in, notIn, lt, lte, gt, gte }, OR / AND, nested relations ({ site: { regionId } })
-// and { some }. It is a test aid only - it proves application logic, NOT database behaviour.
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const time = (v: any) => (v instanceof Date ? v.getTime() : v);
+// and { some }. It is a test aid only - it proves application logic, NOT database behaviour.const time = (v: any) => (v instanceof Date ? v.getTime() : v);
 const isOperatorObject = (c: any) => c && typeof c === "object" && !(c instanceof Date) && !Array.isArray(c) && Object.keys(c).some((k) => ["not", "in", "notIn", "lt", "lte", "gt", "gte", "some", "equals"].includes(k));
 
 function matchValue(actual: any, cond: any): boolean {

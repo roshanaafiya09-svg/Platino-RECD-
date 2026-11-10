@@ -13,10 +13,7 @@ import type { Server } from "node:http";
 import express from "express";
 import { Prisma } from "@prisma/client";
 import { ROLE_KEY, PERMISSION_KEY } from "@recd/shared";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const P = PERMISSION_KEY;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";const P = PERMISSION_KEY;
 const p2002 = (modelName: string, ...target: string[]) =>
   new Prisma.PrismaClientKnownRequestError("Unique constraint failed", { code: "P2002", clientVersion: "5.22.0", meta: { modelName, target } });
 const p2003 = () => new Prisma.PrismaClientKnownRequestError("fk", { code: "P2003", clientVersion: "5.22.0", meta: { modelName: "Order" } });

@@ -18,14 +18,10 @@ import express from "express";
 import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY as P, ROLE_KEY } from "@recd/shared";
 import { deepMatch } from "./helpers/deepMatch";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Stub = Record<string, (...args: any[]) => any>;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";type Stub = Record<string, (...args: any[]) => any>;
 const db: Record<string, Stub> = {};
 const stubModel = (model: string, impl: Stub) => { db[model] = impl; };
 const tick = () => new Promise<void>((r) => setImmediate(r));
-const day = (s: string) => new Date(`${s}T00:00:00.000Z`);
 // Dates are relative to "today" so the dashboard (which uses the real clock) and the job (which is given NOW) agree.
 const NOW = new Date();
 const T0 = new Date(Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth(), NOW.getUTCDate()));
@@ -244,8 +240,6 @@ async function runJob(now = NOW) {
   return runReminderJob(now);
 }
 const reminderOf = (activityId: string) => reminders.find((r) => r.complaintId === activityId || r.amcVisitId === activityId);
-const sentTo = (reminderId?: string) => reminderEvents.filter((e) => e.type === "sent" && (!reminderId || e.reminderId === reminderId));
-const recipientsOf = (templateKey: string) => [...new Set(notifications.filter((n) => n.templateKey === templateKey).map((n) => n.recipientId))].sort();
 
 // =============================================================================================
 // Region mapping (Service Managers AND Regional Managers)

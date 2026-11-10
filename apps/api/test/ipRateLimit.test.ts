@@ -14,10 +14,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
 import { parseTrustProxy } from "../src/lib/proxyConfig";
-import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const store = createFakeRateLimitStore();
+import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";const store = createFakeRateLimitStore();
 const servers: Server[] = [];
 const warnings: string[] = [];
 const realWarn = console.warn;

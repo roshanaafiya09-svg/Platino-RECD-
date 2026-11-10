@@ -32,10 +32,7 @@ import { loggablePayload } from "../src/services/notifications/notificationServi
 import { createFakeOtpStore } from "./helpers/fakeOtpStore";
 import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
 import { installFakeTransactions } from "./helpers/fakeTransactions";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Stub = Record<string, (...args: any[]) => any>;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";type Stub = Record<string, (...args: any[]) => any>;
 const db: Record<string, Stub> = {};
 const calls: Record<string, any[][]> = {};
 function stubModel(model: string, impl: Stub) {

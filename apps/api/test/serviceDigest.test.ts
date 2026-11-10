@@ -4,10 +4,7 @@ process.env.DATABASE_URL = "postgresql://test:test@127.0.0.1:1/test";
 process.env.DIRECT_URL = process.env.DATABASE_URL;
 
 import test, { before, beforeEach, after } from "node:test";
-import assert from "node:assert/strict";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const NOW = new Date("2026-10-21T04:00:00.000Z");
+import assert from "node:assert/strict";const NOW = new Date("2026-10-21T04:00:00.000Z");
 const day = (s: string) => new Date(`${s}T00:00:00.000Z`);
 
 let regions: any[] = [];

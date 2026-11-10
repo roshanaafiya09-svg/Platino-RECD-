@@ -30,10 +30,7 @@ function pointsAtIsolatedDb(raw: string | undefined): boolean {
 const isolated = pointsAtIsolatedDb(process.env.DATABASE_URL) && pointsAtIsolatedDb(process.env.DIRECT_URL) && !!process.env.JWT_SECRET;
 const skip = isolated
   ? false
-  : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test), or JWT_SECRET is missing - refusing to touch any database";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-describe("RECD serial rules against the real test database", { skip }, () => {
+  : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test), or JWT_SECRET is missing - refusing to touch any database";describe("RECD serial rules against the real test database", { skip }, () => {
   const PREFIX = `ZT${Date.now().toString(36).toUpperCase()}`;
   const tracked = { orderIds: new Set<string>(), unitIds: new Set<string>(), customerIds: new Set<string>(), userIds: new Set<string>(), amcIds: new Set<string>(), conversationIds: new Set<string>() };
   // While true, the open-complaint pre-check is skipped, so the request reaches the REAL database index
@@ -49,7 +46,6 @@ describe("RECD serial rules against the real test database", { skip }, () => {
   let base = "";
   let signToken: (p: any) => string;
   let executeConfirmedAction: (tool: string, input: Record<string, unknown>, userId: string) => Promise<string>;
-  let safeActionMessage = "";
   let productId = "";
   let custA = "";
   let custB = "";
@@ -135,7 +131,7 @@ describe("RECD serial rules against the real test database", { skip }, () => {
     assert.ok(Number(port) > 0);
 
     ({ signToken } = await import("../../src/lib/jwt"));
-    ({ executeConfirmedAction, SAFE_ACTION_FAILED_MESSAGE: safeActionMessage } = await import("../../src/routes/agentConversations"));
+    ({ executeConfirmedAction } = await import("../../src/routes/agentConversations"));
     uv = await import("../../src/lib/uniqueViolations");
     prisma.$use(async (params: any, next: any) => {
       if (skipOpenComplaintCheck && params.model === "Complaint" && params.action === "findFirst") return null;

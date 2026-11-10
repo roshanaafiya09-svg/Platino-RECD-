@@ -23,10 +23,7 @@ function pointsAtIsolatedDb(raw: string | undefined): boolean {
 }
 
 const isolated = pointsAtIsolatedDb(process.env.DATABASE_URL) && pointsAtIsolatedDb(process.env.DIRECT_URL);
-const skip = isolated ? false : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test) - refusing to touch any database";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-describe("order creation against the real test database", { skip }, () => {
+const skip = isolated ? false : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test) - refusing to touch any database";describe("order creation against the real test database", { skip }, () => {
   const PREFIX = `ZO${Date.now().toString(36).toUpperCase()}`;
   const year = new Date().getFullYear();
   let seq = 0;

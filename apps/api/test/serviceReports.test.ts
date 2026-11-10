@@ -18,10 +18,7 @@ import { PERMISSION_KEY as P, ROLE_KEY, SERVICE_REPORT_LIMITS } from "@recd/shar
 import { matchesCondition } from "./helpers/fakeOtpStore";
 import { makePng, pngDataUrl } from "./helpers/png";
 import { setReportStorageForTests, sha256Hex, type ReportStorage } from "../src/lib/reportStorage";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Stub = Record<string, (...args: any[]) => any>;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";type Stub = Record<string, (...args: any[]) => any>;
 const db: Record<string, Stub> = {};
 function stubModel(model: string, impl: Stub) {
   db[model] = impl;

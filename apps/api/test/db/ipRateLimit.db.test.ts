@@ -24,10 +24,7 @@ function pointsAtIsolatedDb(raw: string | undefined): boolean {
 const isolated = pointsAtIsolatedDb(process.env.DATABASE_URL) && pointsAtIsolatedDb(process.env.DIRECT_URL) && !!process.env.JWT_SECRET;
 const skip = isolated
   ? false
-  : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test), or JWT_SECRET is missing - refusing to touch any database";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-describe("shared IP rate limiter against the real test database", { skip }, () => {
+  : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test), or JWT_SECRET is missing - refusing to touch any database";describe("shared IP rate limiter against the real test database", { skip }, () => {
   const WINDOW = 15 * 60 * 1000;
   const BASE = Date.UTC(2001, 0, 1, 0, 0, 0); // a window that cannot collide with real traffic
   const windowStart = new Date(Math.floor(BASE / WINDOW) * WINDOW);

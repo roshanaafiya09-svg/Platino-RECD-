@@ -1,9 +1,7 @@
 // An in-memory stand-in for the IpRateLimit table, shaped like the single atomic upsert-and-increment the limiter issues
 // (INSERT ... ON CONFLICT DO UPDATE ... RETURNING count). Each call is one synchronous step, as the real statement is atomic in
 // PostgreSQL. It proves the limiter's logic and lets every API instance in a test share one store; it does NOT prove the SQL itself -
-// test/db/ipRateLimit.db.test.ts runs the real statement against the isolated test database.
-/* eslint-disable @typescript-eslint/no-explicit-any */
-export interface FakeRateLimitStore {
+// test/db/ipRateLimit.db.test.ts runs the real statement against the isolated test database.export interface FakeRateLimitStore {
   rows: Map<string, number>;
   /** When true every statement throws, like an unreachable database. */
   failing: boolean;

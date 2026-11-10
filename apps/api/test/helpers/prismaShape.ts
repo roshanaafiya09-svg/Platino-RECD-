@@ -3,9 +3,7 @@
 //  - include: { rel: true } -> scalars + that relation with ALL of ITS scalar columns (this is what leaks a User's passwordHash);
 //  - include: { rel: {select|include: ...} } / select: { field: true, rel: {...} } -> exactly what is asked for, recursively.
 // Tests keep related records embedded in the fixture (e.g. site.assignedEngineer = <full user row>); this helper decides how much of
-// it a route's query would actually have returned. It checks the SHAPE a route asks for - it is not a database.
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const isRelation = (v: unknown): boolean => v !== null && typeof v === "object" && !(v instanceof Date);
+// it a route's query would actually have returned. It checks the SHAPE a route asks for - it is not a database.const isRelation = (v: unknown): boolean => v !== null && typeof v === "object" && !(v instanceof Date);
 
 export function scalarsOf(row: any): any {
   if (row === null || row === undefined) return row;

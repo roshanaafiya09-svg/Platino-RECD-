@@ -33,10 +33,7 @@ function pointsAtIsolatedDb(raw: string | undefined): boolean {
 const isolated = pointsAtIsolatedDb(process.env.DATABASE_URL) && pointsAtIsolatedDb(process.env.DIRECT_URL) && !!process.env.JWT_SECRET;
 const skip = isolated
   ? false
-  : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test), or JWT_SECRET is missing - refusing to touch any database";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-describe("ticket management against the real test database", { skip }, () => {
+  : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test), or JWT_SECRET is missing - refusing to touch any database";describe("ticket management against the real test database", { skip }, () => {
   const PREFIX = `ZT${Date.now().toString(36).toUpperCase()}`;
   const tracked = { userIds: new Set<string>(), customerIds: new Set<string>(), vendorIds: new Set<string>(), regionIds: new Set<string>(), orderIds: new Set<string>(), unitIds: new Set<string>(), complaintIds: new Set<string>(), productIds: new Set<string>() };
   const realConsole = { log: console.log, error: console.error };

@@ -16,10 +16,7 @@ import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
 import { createFakeRateLimitStore } from "./helpers/fakeRateLimitStore";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const R = ROLE_KEY;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";const R = ROLE_KEY;
 const MANAGE = [PERMISSION_KEY.MANAGE_USERS, PERMISSION_KEY.VIEW_SITE_STATUS];
 const PERMS: Record<string, string[]> = {
   [R.SUPER_ADMIN]: [...MANAGE, PERMISSION_KEY.MANAGE_SETTINGS],

@@ -5,10 +5,7 @@
 //
 // It proves the application logic. It does NOT prove the real database behaves the same - that is what the
 // real-database suite (test/db/loginOtp.db.test.ts) is for.
-import { Prisma } from "@prisma/client";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-export interface OtpRow {
+import { Prisma } from "@prisma/client";export interface OtpRow {
   id: string;
   userId: string;
   code: string;

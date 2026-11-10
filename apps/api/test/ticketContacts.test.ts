@@ -12,10 +12,7 @@ import type { Server } from "node:http";
 import express from "express";
 import { PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
 import { buildTicketContactInfo, contactAudience } from "../src/lib/ticketContacts";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Stub = Record<string, (...args: any[]) => any>;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";type Stub = Record<string, (...args: any[]) => any>;
 const db: Record<string, Stub> = {};
 const calls: Record<string, any[][]> = {};
 function stubModel(model: string, impl: Stub) {

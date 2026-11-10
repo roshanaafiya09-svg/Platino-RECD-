@@ -14,10 +14,7 @@ import express from "express";
 import { Prisma } from "@prisma/client";
 import { ROLE_KEY, PERMISSION_KEY, RECD_UNIT_STATUS } from "@recd/shared";
 import { shape } from "./helpers/prismaShape";
-import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type Stub = Record<string, (...args: any[]) => any>;
+import { useUserModelForAuth } from "./helpers/authLookupFromUserModel";type Stub = Record<string, (...args: any[]) => any>;
 
 /** A unique-constraint error shaped exactly like the ones Prisma 5.22 raises from this project's Postgres. */
 const p2002 = (modelName: string, ...target: string[]) =>

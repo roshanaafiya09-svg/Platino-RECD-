@@ -17,10 +17,7 @@ import {
   seedAccounts,
   seedPasswordProblem,
   type SeedDb,
-} from "../prisma/seedAccounts";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const hash = async (p: string) => `h(${p})`;
+} from "../prisma/seedAccounts";const hash = async (p: string) => `h(${p})`;
 const compare = async (plain: string, h: string) => h === `h(${plain})`;
 
 const ROLES = Object.values(ROLE_KEY).map((key) => ({ id: `role-${key}`, key }));
