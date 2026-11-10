@@ -65,5 +65,5 @@ main()
     for (const r of rows) console.log(`${r.result.padEnd(4)}  ${r.check.padEnd(52)} ${r.detail}`);
     const failed = rows.filter((r) => r.result === "FAIL").length;
     console.log(failed ? `\n${failed} check(s) FAILED.` : "\nAll checks passed (read-only; nothing was changed).");
-    process.exit(failed ? 1 : 0);
+    process.exitCode = failed ? 1 : 0; // (not process.exit: on Windows it can trip a libuv assertion after fetch)
   });
