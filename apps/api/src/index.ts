@@ -1,6 +1,6 @@
 import "dotenv/config";
 import express from "express";
-import { apiErrorHandler } from "./lib/errorHandler";
+import { apiErrorHandler, apiNotFound } from "./lib/errorHandler";
 import cors from "cors";
 import { parseTrustProxy } from "./lib/proxyConfig";
 import { buildCorsOptions, parseAllowedOrigins, scrubSecretKeysFromJson, securityHeaders } from "./lib/httpSecurity";
@@ -83,7 +83,8 @@ app.use("/agent", agentProvidersRouter);
 app.use("/agent", agentConversationsRouter);
 app.use("/agent", agentCronRouter);
 
-// Catches anything a route handler throws or rejects with, and malformed JSON bodies (400); see lib/errorHandler.ts.
+// Unknown URLs answer 404 in JSON; then anything a route handler throws or rejects with, and bad request bodies (400/413/415); see lib/errorHandler.ts.
+app.use(apiNotFound);
 app.use(apiErrorHandler);
 
 const port = Number(process.env.PORT) || 4000;

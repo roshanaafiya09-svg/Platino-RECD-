@@ -13,14 +13,16 @@
  */
 import { Router } from "express";
 import { runTicketEscalation } from "../lib/ticketEscalation";
+import { isAuthorisedCron, logCronRun } from "../lib/cronAuth";
 
 export const complaintCronRouter = Router();
 
 complaintCronRouter.get("/escalate", async (req, res) => {
-  const expected = process.env.CRON_SECRET;
-  if (!expected || req.headers.authorization !== `Bearer ${expected}`) {
+  if (!isAuthorisedCron(req.headers.authorization)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
+  const startedAt = Date.now();
   const summary = await runTicketEscalation(new Date());
+  logCronRun("ticket-escalation", startedAt, summary as unknown as Record<string, unknown>);
   res.json({ ok: true, ...summary });
 });

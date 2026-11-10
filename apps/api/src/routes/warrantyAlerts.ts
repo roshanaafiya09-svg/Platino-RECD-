@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { authenticate, type AuthenticatedRequest } from "../middleware/auth";
 import { buildWarrantyAlerts, runWarrantyReminders } from "../lib/warranty";
+import { isAuthorisedCron, logCronRun } from "../lib/cronAuth";
 
 /** Login-time warranty notice: the units the CALLER may see whose warranty is expiring soon or recently expired. Read-only; scoping lives in buildWarrantyAlerts. */
 export const warrantyAlertsRouter = Router();
@@ -18,8 +19,9 @@ warrantyAlertsRouter.get("/", async (req: AuthenticatedRequest, res) => {
  */
 export const warrantyCronRouter = Router();
 warrantyCronRouter.get("/send-reminders", async (req, res) => {
-  const expected = process.env.CRON_SECRET;
-  if (!expected || req.headers.authorization !== `Bearer ${expected}`) return res.status(401).json({ error: "Unauthorized" });
+  if (!isAuthorisedCron(req.headers.authorization)) return res.status(401).json({ error: "Unauthorized" });
+  const startedAt = Date.now();
   const r = await runWarrantyReminders(new Date());
+  logCronRun("warranty-reminders", startedAt, r as unknown as Record<string, unknown>);
   res.json({ ok: true, ...r });
 });

@@ -16,6 +16,7 @@ import { reminderScope, type ReminderScope } from "../lib/regions";
 import { buildOverview, runReminderJob, type OverviewFilters } from "../lib/reminders";
 import { logComplaintEvent } from "../lib/ticketEvents";
 import { runServiceDigest } from "../lib/serviceDigest";
+import { isAuthorisedCron, logCronRun } from "../lib/cronAuth";
 
 /**
  * Scheduled reminder processing. Invoked by Vercel Cron (see vercel.json), which sends `Authorization: Bearer $CRON_SECRET`.
@@ -25,8 +26,8 @@ import { runServiceDigest } from "../lib/serviceDigest";
 export const reminderCronRouter = Router();
 
 reminderCronRouter.get("/run", async (req, res) => {
-  const expected = process.env.CRON_SECRET;
-  if (!expected || req.headers.authorization !== `Bearer ${expected}`) return res.status(401).json({ error: "Unauthorized" });
+  if (!isAuthorisedCron(req.headers.authorization)) return res.status(401).json({ error: "Unauthorized" });
+  const startedAt = Date.now();
   const now = new Date();
   const reminders = await runReminderJob(now);
   // The daily Service Manager digest rides on this cron; its failure must not hide the reminder result.
@@ -34,6 +35,7 @@ reminderCronRouter.get("/run", async (req, res) => {
     console.error("Service digest failed", err);
     return { enabled: true, error: true };
   });
+  logCronRun("service-reminders", startedAt, reminders as unknown as Record<string, unknown>);
   res.json({ ok: true, ...reminders, digest });
 });
 

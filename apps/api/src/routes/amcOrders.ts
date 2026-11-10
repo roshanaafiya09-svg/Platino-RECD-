@@ -3,6 +3,7 @@ import { createAmcOrderSchema, updateAmcOrderSchema, renewAmcSchema, planNewPeri
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
+import { isAuthorisedCron, logCronRun } from "../lib/cronAuth";
 import { validateAmcUnitLinks } from "../lib/unitLinks";
 import { AmcError, describeContract, listHistory, loadAmcPolicy, renewContract, runAmcExpiryReminders, updateContract } from "../lib/amcContracts";
 
@@ -42,11 +43,12 @@ function sendAmcError(res: Response, err: unknown) {
  * settings (defaults: 30 days before the end date, every 3 days) - see lib/amcContracts.ts.
  */
 amcOrdersRouter.get("/send-expiry-reminders", async (req, res) => {
-  const expected = process.env.CRON_SECRET;
-  if (!expected || req.headers.authorization !== `Bearer ${expected}`) {
+  if (!isAuthorisedCron(req.headers.authorization)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
+  const startedAt = Date.now();
   const result = await runAmcExpiryReminders(new Date());
+  logCronRun("amc-expiry", startedAt, result);
   res.json({ ok: true, remindersSent: result.remindersSent, vendorRemindersSent: result.vendorRemindersSent, recipients: result.recipients });
 });
 
