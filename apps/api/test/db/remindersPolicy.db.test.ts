@@ -2,9 +2,10 @@
  * Real-database tests for the APPROVED R6 reminder and escalation policy:
  *
  *   SCHEDULE   first reminder 2 days before the due date -> another on the due date -> one every day after it, until the ticket is resolved /
- *              closed / archived (or the reminder is acknowledged); never twice in a day, however often (or concurrently) the job runs.
- *   ESCALATION once, 48 hours after the DUE DATE (not after the first delivery), to the responsible Regional Managers of the ticket's site region
- *              (Management when the region has none); it only notifies - the ticket itself is never touched.
+ *              closed / archived; never twice in a (INDIAN) day, however often (or concurrently) the job runs. Acknowledging does NOT stop anything.
+ *   ESCALATION once, 48 hours after the DUE DATE began (00:00 IST; not after the first delivery), to the responsible Regional Managers of the
+ *              ticket's site region (Management ONLY when the region has no active Regional Manager); it only notifies - the ticket is never touched.
+ *   TIME       the business time zone is India Standard Time (+05:30, no daylight saving): a day begins at 18:30 UTC the evening before.
  *   RECIPIENTS reminders: the ticket's assigned engineer + the region's active Regional Managers + the region's active Service Managers.
  *
  * Time is simulated: every job run is given an explicit "now". The e-mail provider is replaced by a stub that records what it was asked to send
@@ -48,6 +49,9 @@ describe("approved R6 reminder and escalation policy against the real test datab
   /** A due date is a calendar day, stored as UTC midnight. */
   const dueOn = (n: number) => new Date(T0.getTime() + n * DAY);
   const dayOf = (n: number, extraHours = 0) => runAt(n, extraHours).toISOString().slice(0, 10);
+  /** The instant the INDIAN calendar day `n` (days from today) begins: 00:00 IST = 18:30 UTC the evening before. */
+  const istMidnight = (n: number) => new Date(T0.getTime() + n * DAY - 5.5 * HOUR);
+  const MINUTE = 60 * 1000;
   const tracked = { userIds: new Set<string>(), customerIds: new Set<string>(), orderIds: new Set<string>(), regionIds: new Set<string>(), unitIds: new Set<string>(), complaintIds: new Set<string>() };
   let seq = 0;
   const realConsole = { log: console.log, error: console.error };
@@ -334,30 +338,26 @@ describe("approved R6 reminder and escalation policy against the real test datab
   // STOP CONDITIONS
   // ------------------------------------------------------------------------------------------
 
-  test("stops: resolved, closed, archived and acknowledged tickets get no further reminder and are never escalated", async () => {
+  test("stops: resolved, closed and archived tickets get no further reminder and are never escalated", async () => {
     await setPolicy(2, 48);
-    const [ack, resolved, closed, archived, stays] = [
-      await makeTicket(W.northCo, dueOn(180)), await makeTicket(W.northCo, dueOn(180)), await makeTicket(W.northCo, dueOn(180)),
-      await makeTicket(W.northCo, dueOn(180)), await makeTicket(W.northCo, dueOn(180)),
+    const [resolved, closed, archived, stays] = [
+      await makeTicket(W.northCo, dueOn(180)), await makeTicket(W.northCo, dueOn(180)), await makeTicket(W.northCo, dueOn(180)), await makeTicket(W.northCo, dueOn(180)),
     ];
     await runReminderJob(runAt(178));
-    await runReminderJob(runAt(180)); // the due date: a reminder for all five
-    assert.equal(got(W.sm1.id).length, 10, "five tickets: first + due-date reminder each");
-    const remAck = await reminderOf(ack.id);
-    assert.equal((await call(W.admin, "POST", `/reminders/${remAck.id}/acknowledge`, {})).status, 200);
+    await runReminderJob(runAt(180)); // the due date: a reminder for all four
+    assert.equal(got(W.sm1.id).length, 8, "four tickets: first + due-date reminder each");
     await prisma.complaint.update({ where: { id: resolved.id }, data: { status: "resolved", closedAt: runAt(180) } });
     await prisma.complaint.update({ where: { id: closed.id }, data: { status: "closed", closedAt: runAt(180) } });
     await prisma.complaint.update({ where: { id: archived.id }, data: { archivedAt: runAt(180) } });
     mails = [];
     const out = await runReminderJob(runAt(181));
-    assert.equal(aboutTicket(stays.ticketNumber, "service_reminder").length > 0, true, "the open, unacknowledged ticket is still reminded");
-    for (const t of [ack, resolved, closed, archived]) assert.equal(aboutTicket(t.ticketNumber, "service_reminder").length, 0, `${t.ticketNumber}: no reminder after it stopped`);
+    assert.equal(aboutTicket(stays.ticketNumber, "service_reminder").length > 0, true, "the open ticket is still reminded");
+    for (const t of [resolved, closed, archived]) assert.equal(aboutTicket(t.ticketNumber, "service_reminder").length, 0, `${t.ticketNumber}: no reminder after it stopped`);
     assert.ok(out.closed >= 3, "the resolved, closed and archived tickets' reminders are closed");
     for (const t of [resolved, closed, archived]) assert.equal((await reminderOf(t.id)).status, "closed");
-    assert.equal((await reminderOf(ack.id)).status, "acknowledged");
     mails = [];
-    for (const n of [182, 183, 184]) await runReminderJob(runAt(n)); // past the 48 hours after the due date
-    for (const t of [ack, resolved, closed, archived]) {
+    for (const n of [182, 183, 184]) await runReminderJob(runAt(n)); // past 48 hours after the due date
+    for (const t of [resolved, closed, archived]) {
       assert.equal(aboutTicket(t.ticketNumber, "service_reminder").length, 0);
       assert.equal(aboutTicket(t.ticketNumber, "service_reminder_escalated").length, 0, `${t.ticketNumber}: never escalated`);
       assert.equal((await reminderOf(t.id)).escalationLevel, 0);
@@ -397,20 +397,22 @@ describe("approved R6 reminder and escalation policy against the real test datab
   // ESCALATION
   // ------------------------------------------------------------------------------------------
 
-  test("escalation: exactly 48 hours after the DUE DATE - not a minute before - to the region's Regional Managers only, once, and the ticket is untouched", async () => {
+  test("escalation: exactly 48 hours after the due date BEGINS (00:00 IST) - not a minute before - to the region's Regional Managers only, once, and the ticket is untouched", async () => {
     await setPolicy(2, 48);
     const t = await makeTicket(W.northCo, dueOn(220), { assignedToId: W.eng.id, status: "in_progress" });
     const before = await prisma.complaint.findUnique({ where: { id: t.id } });
     await runReminderJob(runAt(218));
-    await runReminderJob(new Date(dueOn(222).getTime() - 60_000)); // 47 h 59 min after the due date (00:00 UTC of the due day)
+    await runReminderJob(new Date(istMidnight(222).getTime() - MINUTE)); // 47 h 59 min after the Indian due date began
     assert.equal((await reminderOf(t.id)).escalationLevel, 0, "one minute short of 48 hours: not escalated");
     assert.equal(mails.filter((m) => m.template === "service_reminder_escalated").length, 0);
-    const out = await runReminderJob(dueOn(222)); // exactly 48 hours after the due date
+    await runReminderJob(runAt(221)); // the daily run (09:30 IST) the day before the boundary: still too early
+    assert.equal((await reminderOf(t.id)).escalationLevel, 0);
+    const out = await runReminderJob(istMidnight(222)); // exactly 48 hours after the due date began = 00:00 IST two days later = 18:30 UTC
     assert.equal(out.escalated, 1);
     assert.deepEqual(recipientsOf(t.ticketNumber, "service_reminder_escalated"), sortedIds(W.rm1, W.rm2), "the responsible Regional Managers - including those who already got the reminders");
     assert.equal(got(W.sm1.id, "service_reminder_escalated").length, 0, "not the Service Manager");
     assert.equal(got(W.eng.id, "service_reminder_escalated").length, 0, "not the engineer");
-    assert.equal(got(W.mgmt.id, "service_reminder_escalated").length, 0, "not Management: the region has Regional Managers");
+    assert.equal(got(W.mgmt.id, "service_reminder_escalated").length, 0, "not Management: the region HAS active Regional Managers");
     assert.equal(got(W.rmOff.id, "service_reminder_escalated").length, 0, "not an inactive manager");
     assert.equal(got(W.rmSouth.id, "service_reminder_escalated").length, 0, "not another region's manager");
     const rem = await reminderOf(t.id);
@@ -419,7 +421,6 @@ describe("approved R6 reminder and escalation policy against the real test datab
     const afterRow = await prisma.complaint.findUnique({ where: { id: t.id } });
     assert.deepEqual(afterRow, before, "escalation notifies only: the ticket (status, assignee, due date, everything) is exactly as it was");
     assert.equal((await prisma.complaintEvent.count({ where: { complaintId: t.id, type: { in: ["status_changed", "closed", "assigned"] } } })), 0, "no ticket history entry was written");
-    // the escalation text says what it is
     assert.equal(aboutTicket(t.ticketNumber, "service_reminder_escalated")[0].data.escalationHours, 48);
   });
 
@@ -428,10 +429,10 @@ describe("approved R6 reminder and escalation policy against the real test datab
     const t = await makeTicket(W.northCo, dueOn(230));
     await runReminderJob(runAt(231)); // the very first reminder is only created and delivered one day AFTER the due date
     assert.equal((await reminderOf(t.id)).sentAt.getTime(), runAt(231).getTime());
-    await runReminderJob(new Date(dueOn(232).getTime() - 1));
+    await runReminderJob(new Date(istMidnight(232).getTime() - 1));
     assert.equal((await reminderOf(t.id)).escalationLevel, 0);
-    await runReminderJob(runAt(232)); // 04:00 on due+2 days: the first run after 48 h from the due date, only ~24 h after the delivery
-    assert.equal((await reminderOf(t.id)).escalationLevel, 1, "escalated 48 h after the due date although the reminder was delivered only ~24 h earlier");
+    await runReminderJob(istMidnight(232)); // 48 h after the Indian due date began, only ~15 h after the delivery
+    assert.equal((await reminderOf(t.id)).escalationLevel, 1, "escalated 48 h after the due date although the reminder was delivered only hours earlier");
     assert.deepEqual(recipientsOf(t.ticketNumber, "service_reminder_escalated"), sortedIds(W.rm1, W.rm2));
   });
 
@@ -549,17 +550,76 @@ describe("approved R6 reminder and escalation policy against the real test datab
     assert.deepEqual(recipientsOf(t.ticketNumber, "service_reminder_escalated"), sortedIds(W.rm1, W.rm2));
   });
 
-  test("escalation: an acknowledged reminder is never escalated and its daily reminders stop too", async () => {
+  test("acknowledgement does NOT stop anything: an acknowledged reminder keeps getting the daily reminders and is still escalated, until the ticket is resolved", async () => {
     await setPolicy(2, 48);
     const t = await makeTicket(W.northCo, dueOn(300));
     await runReminderJob(runAt(298));
-    await runReminderJob(runAt(300));
+    await runReminderJob(runAt(300)); // the due date
     const rem = await reminderOf(t.id);
     assert.equal((await call(W.admin, "POST", `/reminders/${rem.id}/acknowledge`, {})).status, 200);
+    assert.equal((await reminderOf(t.id)).status, "acknowledged");
     mails = [];
-    for (const n of [301, 302, 303, 304]) await runReminderJob(runAt(n, 1));
-    assert.equal(mails.length, 0, "no daily reminder and no escalation after acknowledgement");
-    assert.equal((await reminderOf(t.id)).escalationLevel, 0);
+    await runReminderJob(runAt(301));
+    assert.equal(got(W.sm1.id).length, 1, "the daily reminder still goes out the day after it was acknowledged");
+    assert.equal(got(W.eng.id).length, 0, "(the ticket has no assignee)");
+    const out = await runReminderJob(runAt(302)); // past 48 h after the due date
+    assert.equal(out.escalated, 1, "the acknowledged reminder is still escalated");
+    assert.deepEqual(recipientsOf(t.ticketNumber, "service_reminder_escalated"), sortedIds(W.rm1, W.rm2));
+    const after = await reminderOf(t.id);
+    assert.deepEqual([after.status, after.escalationLevel], ["acknowledged", 1], "it stays acknowledged; the escalation is recorded");
+    for (const n of [303, 304]) await runReminderJob(runAt(n));
+    assert.equal(got(W.sm1.id).length, 4, "and the daily reminders carry on (301, 302, 303, 304)");
+    assert.equal(aboutTicket(t.ticketNumber, "service_reminder_escalated").length, 2, "one escalation per Regional Manager, once");
+    // only the ticket being resolved stops it
+    await prisma.complaint.update({ where: { id: t.id }, data: { status: "resolved", closedAt: runAt(304) } });
+    mails = [];
+    for (const n of [305, 306]) await runReminderJob(runAt(n));
+    assert.equal(mails.length, 0, "resolved: nothing more");
+  });
+
+  // ------------------------------------------------------------------------------------------
+  // INDIA STANDARD TIME
+  // ------------------------------------------------------------------------------------------
+
+  test("India time: the first reminder, the due-date reminder and 'overdue' all switch over at midnight IST (18:30 UTC), not at midnight UTC", async () => {
+    await setPolicy(2, null);
+    const t = await makeTicket(W.northCo, dueOn(350)); // the Indian date: it begins at istMidnight(350)
+    await runReminderJob(new Date(istMidnight(348).getTime() - MINUTE));
+    assert.equal(mails.length, 0, "23:59 IST: still 3 days before in India");
+    await runReminderJob(istMidnight(348));
+    assert.equal(got(W.sm1.id).length, 1, "00:00 IST: 2 days before - the first reminder");
+    assert.equal(got(W.sm1.id)[0].data.overdue, false);
+    await runReminderJob(istMidnight(349));
+    assert.equal(got(W.sm1.id).length, 1, "the day before the due date: nothing");
+    await runReminderJob(new Date(istMidnight(350).getTime() - MINUTE));
+    assert.equal(got(W.sm1.id).length, 1, "23:59 IST the day before: nothing yet");
+    await runReminderJob(istMidnight(350));
+    assert.equal(got(W.sm1.id).length, 2, "00:00 IST on the due date: the due-date reminder");
+    assert.equal(got(W.sm1.id)[1].data.dueToday, true);
+    assert.equal(got(W.sm1.id)[1].data.overdue, false);
+    await runReminderJob(new Date(istMidnight(351).getTime() - MINUTE));
+    assert.equal(got(W.sm1.id).length, 2, "23:59 IST on the due date: still the same Indian day, no second reminder");
+    await runReminderJob(istMidnight(351));
+    assert.equal(got(W.sm1.id).length, 3, "00:00 IST the next day: the first overdue reminder");
+    assert.equal(got(W.sm1.id)[2].data.overdue, true);
+    assert.equal(got(W.sm1.id)[2].data.daysOverdue, 1);
+    assert.equal(got(W.sm1.id)[2].data.dueToday, false);
+    const days = (await eventsOf((await reminderOf(t.id)).id, "repeat_sent")).filter((e: any) => e.recipientId === W.sm1.id).map((e: any) => e.detail.day);
+    assert.deepEqual(days, [dayOf(350), dayOf(351)], "the recorded day is the INDIAN date");
+  });
+
+  test("India time: one reminder per INDIAN day - two runs on the same Indian date but different UTC dates send once, and the next Indian day sends again", async () => {
+    await setPolicy(2, null);
+    await makeTicket(W.northCo, dueOn(360));
+    await runReminderJob(runAt(358));
+    // The Indian date 361 runs from istMidnight(361) = 360 18:30 UTC to istMidnight(362) = 361 18:30 UTC: two different UTC dates.
+    await runReminderJob(new Date(istMidnight(361).getTime() + 30 * MINUTE)); // 00:30 IST (still 360 in UTC)
+    assert.equal(got(W.sm1.id).length, 2);
+    await runReminderJob(new Date(istMidnight(361).getTime() + 22 * HOUR)); // 22:00 IST (already 361 in UTC)
+    await runReminderJob(new Date(istMidnight(362).getTime() - MINUTE)); // 23:59 IST
+    assert.equal(got(W.sm1.id).length, 2, "same Indian day: nothing more, although the UTC date changed in between");
+    await runReminderJob(new Date(istMidnight(362).getTime() + 30 * MINUTE));
+    assert.equal(got(W.sm1.id).length, 3, "the next Indian day");
   });
 
   // ------------------------------------------------------------------------------------------

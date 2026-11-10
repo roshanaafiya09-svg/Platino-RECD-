@@ -69,7 +69,9 @@ export const ACKNOWLEDGEABLE_REMINDER_STATUS = REMINDER_STATUS.SENT;
  */
 export const UNDELIVERED_REMINDER_STATUSES: string[] = [REMINDER_STATUS.FAILED, REMINDER_STATUS.NO_RECIPIENT];
 /** Every status from which a reminder can be escalated. */
-export const ESCALATABLE_REMINDER_STATUSES: string[] = [REMINDER_STATUS.SENT, ...UNDELIVERED_REMINDER_STATUSES];
+/** Reminders that are still being reminded and escalated. An ACKNOWLEDGED reminder is included: acknowledging records who has seen it but does not stop anything. */
+export const ACTIVE_REMINDER_STATUSES: string[] = [REMINDER_STATUS.SENT, REMINDER_STATUS.ACKNOWLEDGED];
+export const ESCALATABLE_REMINDER_STATUSES: string[] = [...ACTIVE_REMINDER_STATUSES, ...UNDELIVERED_REMINDER_STATUSES];
 
 /** The approved R6 policy has ONE escalation (to the responsible manager), not two. */
 export const MAX_REMINDER_ESCALATION_LEVEL = 1;
@@ -79,20 +81,57 @@ export const SENDING_STALE_MINUTES = 15;
 
 const DAY_MS = 24 * 3600 * 1000;
 
+/**
+ * THE BUSINESS TIME ZONE for due dates, reminders and escalation: India Standard Time (Asia/Kolkata), a fixed UTC+05:30 with no daylight saving, so a fixed
+ * offset is exact. A due date is a calendar DATE in this zone: it is stored as that date at UTC midnight (so the stored value's date part IS the Indian date),
+ * its day starts at 00:00 IST (= 18:30 UTC the evening before) and a reminder "today" means today's Indian date. Nothing is stored differently; only the
+ * boundaries of a day are read in IST.
+ */
+export const BUSINESS_TIME_ZONE = "Asia/Kolkata";
+export const BUSINESS_UTC_OFFSET_MINUTES = 330;
+const BUSINESS_OFFSET_MS = BUSINESS_UTC_OFFSET_MINUTES * 60 * 1000;
+
+/** The Indian calendar date (YYYY-MM-DD) of an instant. */
+export function businessDate(now: Date): string {
+  return new Date(now.getTime() + BUSINESS_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** The instant an Indian calendar date begins: 00:00 IST. */
+export function businessDayStart(date: string): Date {
+  return new Date(Date.parse(`${date}T00:00:00.000Z`) - BUSINESS_OFFSET_MS);
+}
+
+/** The calendar date a stored due date stands for (its date part), or null when it is missing or not a date. */
+export function dueDateKey(dueDate: Date | string | null | undefined): string | null {
+  if (!dueDate) return null;
+  const d = new Date(dueDate);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+/** Whole calendar days from one YYYY-MM-DD date to another (negative when `to` is earlier). */
+export function businessDaysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)) / DAY_MS);
+}
+
+/** A YYYY-MM-DD date plus `days` calendar days. */
+export function addBusinessDays(date: string, days: number): string {
+  return new Date(Date.parse(`${date}T00:00:00.000Z`) + days * DAY_MS).toISOString().slice(0, 10);
+}
+
 export type DueState = "no_due_date" | "pending" | "due_soon" | "overdue";
 
 /**
  * The one definition of overdue, used by the dashboard and the cron job.
- *  - A due date is a calendar DATE (stored as UTC midnight). An activity is overdue once that whole day has passed.
+ *  - A due date is a calendar DATE in India (see BUSINESS_TIME_ZONE; stored as that date at UTC midnight). An activity is overdue once that whole Indian day has passed.
  *  - "due soon" exists only when the policy sets a lead time (leadDays); with no lead time there is just pending / overdue.
  *  - No due date is its own state; nothing is invented for it.
  */
 export function classifyDue(dueDate: Date | string | null | undefined, now: Date, leadDays: number | null | undefined): DueState {
-  if (!dueDate) return "no_due_date";
-  const due = new Date(dueDate).getTime();
-  if (Number.isNaN(due)) return "no_due_date";
-  if (now.getTime() >= due + DAY_MS) return "overdue";
-  if (leadDays != null && leadDays >= 0 && due - now.getTime() <= leadDays * DAY_MS) return "due_soon";
+  const key = dueDateKey(dueDate);
+  if (!key) return "no_due_date";
+  const today = businessDate(now);
+  if (today > key) return "overdue";
+  if (leadDays != null && leadDays >= 0 && businessDaysBetween(today, key) <= leadDays) return "due_soon";
   return "pending";
 }
 
@@ -104,38 +143,37 @@ export function reminderEligible(dueDate: Date | string | null | undefined, now:
 }
 
 /**
- * Is an unacknowledged reminder due for its escalation? (Approved R6 policy.)
+ * Is a reminder due for its escalation? (Approved R6 policy.)
  *  - The clock is the DUE DATE of the activity, never the time a reminder was delivered: the escalation is due once `escalationHours` (48 in
- *    the approved policy) have passed since the due date. A due date is a calendar DATE stored as UTC midnight, so "48 hours after the due date" is
- *    that midnight plus 48 hours; the daily job then escalates at its first run after that instant.
+ *    the approved policy) have passed since the due date began. A due date is an Indian calendar DATE that begins at 00:00 IST, so "48 hours after the due
+ *    date" is that instant plus 48 hours (00:00 IST two days later); the daily job then escalates at its first run after it.
+ *  - Acknowledging a reminder does NOT stop its escalation (the project owner's decision): only the activity being resolved / closed / archived does.
  *  - There is a single escalation (MAX_REMINDER_ESCALATION_LEVEL = 1). It only notifies; it never changes the activity's status.
  *  - Works the same for a delivered reminder and an undelivered one (failed / no recipient): a failed delivery must not stop an overdue activity from
  *    being escalated.
  *  - An escalation that fell due and was already attempted (its delivery failed) stays due until it is delivered (a retry), however the clock moves.
  */
 export function escalationDue(
-  r: { status: string; dueDate: Date | string; acknowledgedAt: Date | null; escalationLevel: number; escalationAttempts?: number | null },
+  r: { status: string; dueDate: Date | string; /** recorded, but ignored here */ acknowledgedAt?: Date | null; escalationLevel: number; escalationAttempts?: number | null },
   escalationHours: number | null | undefined,
   now: Date,
 ): boolean {
   if (escalationHours == null || escalationHours <= 0) return false;
-  if (r.acknowledgedAt || !ESCALATABLE_REMINDER_STATUSES.includes(r.status)) return false;
+  if (!ESCALATABLE_REMINDER_STATUSES.includes(r.status)) return false;
   if (r.escalationLevel >= MAX_REMINDER_ESCALATION_LEVEL) return false;
   if ((r.escalationAttempts ?? 0) > 0) return true;
-  const due = new Date(r.dueDate).getTime();
-  if (Number.isNaN(due)) return false;
-  return now.getTime() - due >= escalationHours * 3600 * 1000;
+  const key = dueDateKey(r.dueDate);
+  if (!key) return false;
+  return now.getTime() - businessDayStart(key).getTime() >= escalationHours * 3600 * 1000;
 }
 
 /**
- * Is today (the UTC calendar day of `now`) the due date or later? The daily reminder runs on the due date itself and on every day after it, so this is
+ * Is today (the Indian calendar date of `now`) the due date or later? The daily reminder runs on the due date itself and on every day after it, so this is
  * the test for "send today's reminder" (the first reminder, sent earlier within the lead time, is separate).
  */
 export function dueDayReached(dueDate: Date | string | null | undefined, now: Date): boolean {
-  if (!dueDate) return false;
-  const due = new Date(dueDate);
-  if (Number.isNaN(due.getTime())) return false;
-  return due.toISOString().slice(0, 10) <= now.toISOString().slice(0, 10);
+  const key = dueDateKey(dueDate);
+  return key !== null && key <= businessDate(now);
 }
 
 export const dueDateSchema = z
@@ -177,9 +215,10 @@ export const REMINDER_POLICY_DEFAULTS = { reminderLeadDays: null, reminderEscala
  * values in the environment concerned; the stored policy stays empty = off).
  *   - first reminder   : 2 calendar days before the due date
  *   - due date         : another reminder on the due date itself
- *   - after due date   : one reminder every day (UTC) until the activity is resolved / closed / archived
+ *   - after due date   : one reminder every day (Indian dates) until the activity is resolved / closed / archived. Acknowledging does NOT stop them.
  *   - escalation       : once, `reminderEscalationHours` (48) hours after the DUE DATE, if still unresolved and unacknowledged -> the responsible Regional
- *                        Managers of the activity's region (Management if the region has none). Notification only: it never closes or changes the activity.
+ *                        Managers of the activity's region (Management ONLY if the region has no active Regional Manager). Notification only: it never closes or changes the activity.
+ *   Business time zone : India Standard Time (Asia/Kolkata); the daily job runs at 04:00 UTC = 09:30 IST.
  *   Reminder recipients: the activity's assigned engineer (tickets), the region's Regional Managers and the region's Service Managers.
  */
 export const PROPOSED_REMINDER_POLICY = { reminderLeadDays: 2, reminderEscalationHours: 48 } as const;

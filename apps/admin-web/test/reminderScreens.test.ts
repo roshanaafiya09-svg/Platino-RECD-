@@ -23,7 +23,7 @@ test("status wording: a failed, recipient-less or waiting reminder is never desc
   assert.equal(reminderLabel(null, false).text, "Reminders off");
   assert.equal(reminderLabel({ ...base, status: "sent" }, true).text, "Sent - not acknowledged");
   assert.match(reminderLabel({ ...base, status: "sent", escalationLevel: 2 }, true).text, /escalated \(level 2\)/);
-  assert.equal(reminderLabel({ ...base, status: "acknowledged" }, true).text, "Acknowledged");
+  assert.equal(reminderLabel({ ...base, status: "acknowledged" }, true).text, "Acknowledged - reminders continue until the ticket is resolved", "acknowledging records who saw it; it does not stop the reminders");
   assert.match(reminderLabel({ ...base, status: "failed" }, true).text, /Delivery failed/);
   assert.match(reminderLabel({ ...base, status: "no_recipient", statusReason: "no_region" }, true).text, /site has no region/);
   assert.match(reminderLabel({ ...base, status: "no_recipient", statusReason: "no_active_manager" }, true).text, /no active manager/);

@@ -10,7 +10,7 @@ export interface ReminderLike {
 export function reminderLabel(r: ReminderLike | null, policyOn: boolean): { text: string; cls: string } {
   if (!r) return { text: policyOn ? "No reminder yet" : "Reminders off", cls: "status-pill" };
   switch (r.status) {
-    case "acknowledged": return { text: "Acknowledged", cls: "status-pill status-pill-success" };
+    case "acknowledged": return { text: "Acknowledged - reminders continue until the ticket is resolved", cls: "status-pill status-pill-success" };
     case "sent": return { text: r.escalationLevel > 0 ? `Sent - escalated (level ${r.escalationLevel})` : "Sent - not acknowledged", cls: r.escalationLevel > 0 ? "status-pill status-pill-error" : "status-pill status-pill-warning" };
     case "failed": return { text: r.statusReason === "partial_delivery" ? "Delivered to some managers - retrying the rest" : "Delivery failed (will retry)", cls: "status-pill status-pill-error" };
     case "no_recipient": return { text: r.statusReason === "no_region" ? "No recipient: site has no region" : "No recipient: no active manager for this region", cls: "status-pill status-pill-error" };

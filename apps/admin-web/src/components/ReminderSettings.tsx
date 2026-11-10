@@ -45,7 +45,7 @@ export default function ReminderSettings() {
     <section className="rounded-xl border border-gray-200 bg-white p-4 sm:p-6" data-testid="reminder-settings">
       <h2 className="text-base font-semibold text-gray-900">Service reminders (due dates)</h2>
       <p className="mt-1 text-sm text-gray-500">
-        Reminders go to the ticket&apos;s assigned engineer and to the Regional Managers and Service Managers mapped to the activity&apos;s region. Leave both boxes empty to keep reminders switched off. These are separate from the ticket-age SLA above.
+        Reminders go to the ticket&apos;s assigned engineer and to the Regional Managers and Service Managers mapped to the activity&apos;s region. Days are counted in India Standard Time. Acknowledging a reminder does not stop reminders or escalation - only resolving or closing the ticket does. Leave both boxes empty to keep reminders switched off. These are separate from the ticket-age SLA above.
       </p>
       <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" data-testid="reminder-proposed-policy">
         <p className="font-medium">Approved workflow (not active until saved below)</p>

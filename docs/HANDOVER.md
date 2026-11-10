@@ -1430,40 +1430,46 @@ Before a future migration adds `NOT NULL`: (1) count and list the affected rows 
 - **R1-R10:** not touched by this section; re-verified by the full suites above (userAdmin, serialRules, recdUnitLinks, reminders, serviceReports/Amc, orderCreation/cloneOrderPo, dashboardScope all still pass).
 
 
-## 51. Requirement 6 - APPROVED reminder and escalation policy (2026-11-10, branch `hardening/post-audit`; supersedes sections 33, 35 and 36-era notes where they differ)
+## 51. Requirement 6 - APPROVED reminder and escalation policy (2026-11-10, branch `hardening/post-audit`; supersedes sections 33, 35 and earlier R6 notes where they differ)
 
-The project owner approved the policy below and chose **mapping A** for managers ("the region's managers"). Nothing is switched on in any environment: the stored
-policy stays empty (= off) until a Super Admin saves lead days and escalation hours in Settings; "Fill in the approved values" only pre-fills 2 and 48.
+The project owner approved the policy below and confirmed five decisions (listed at the end). Nothing is switched on in any environment: the stored policy stays empty
+(= off) until a Super Admin saves lead days and escalation hours in Settings; "Fill in the approved values" only pre-fills 2 and 48.
 
-**Schedule** (for every unresolved ticket / scheduled AMC visit with a due date; days are UTC calendar days, the job runs once a day at 04:00 UTC):
+**Business time zone: India Standard Time (Asia/Kolkata, a fixed +05:30, no daylight saving).** A due date is an Indian calendar DATE; it is stored as that date at UTC midnight
+(nothing in the database changed), its day begins at 00:00 IST = 18:30 UTC the evening before, and "today" is today's Indian date. The daily job runs at 04:00 UTC = 09:30 IST.
+Helpers: `BUSINESS_TIME_ZONE`, `businessDate`, `businessDayStart`, `dueDateKey`, `businessDaysBetween`, `addBusinessDays` in `packages/shared/src/serviceReminder.ts`; used by
+`classifyDue`, `reminderEligible`, `dueDayReached`, `escalationDue`, the reminder job, the dashboard and the Service Manager digest. Other modules (AMC, warranty) keep their own day rules - not part of R6.
+
+**Schedule** (every unresolved ticket / scheduled AMC visit with a due date):
 1. 2 days before the due date (`reminderLeadDays = 2`): the first reminder.
 2. On the due date: another reminder.
-3. Every day after the due date: one reminder, until the ticket is resolved / closed / archived (or somebody acknowledges the reminder - existing feature, kept).
-4. Resolved / closed / archived: nothing further, of any kind (housekeeping closes the reminder; no escalation either).
+3. Every day after the due date: one reminder, until the ticket is resolved / closed / archived. **Acknowledging a reminder does NOT stop reminders or escalation** - it only records who has seen it
+   (the reminder shows "Acknowledged - reminders continue until the ticket is resolved"; its status stays `acknowledged`).
+4. Resolved / closed / archived: nothing further, of any kind (housekeeping closes the reminder).
 
-**Escalation:** once, `reminderEscalationHours` (= 48) hours after the **due date** (a due date is stored as UTC midnight, so the escalation is due at that instant + 48 h and the
-daily job sends it at its first run after it). It is measured from the due date, never from the time a reminder was delivered - a reminder delivered late does not delay it, and a
-reminder whose delivery failed is still escalated. It only notifies: the ticket's status, assignee, due date and history are never touched. A single level (`MAX_REMINDER_ESCALATION_LEVEL = 1`):
-the second, Management level of section 33 no longer exists.
+**Escalation:** once, `reminderEscalationHours` (= 48) hours after the due date **began** (00:00 IST of the due date), i.e. 00:00 IST two days later = 18:30 UTC; the daily job sends it at its first run
+after that instant (09:30 IST that day). Measured from the due date, never from a delivery - a reminder delivered late does not delay it and a reminder whose delivery failed is still escalated.
+Notification only: the ticket's status, assignee, due date and history are never touched. A single level (`MAX_REMINDER_ESCALATION_LEVEL = 1`).
 
-**Recipients (mapping A).** What the database actually has: the assigned engineer (`Complaint.assignedToId`; only field engineers can be assigned), and region -> managers through `RegionManager`
-(many managers per region, `regional_manager` and `service_manager` roles). There is **no** per-ticket / per-site / per-region "responsible" or "assigned" manager field and **no** manager hierarchy,
-so "responsible Regional Manager" and "Assigned Regional Manager" are both read as *the active Regional Managers mapped to the ticket's site region*.
-- Reminders -> the assigned engineer (tickets only) + the region's active Regional Managers + the region's active Service Managers (de-duplicated; inactive users never). With none of them: `no_recipient` (dashboard flag, retried every run).
-- Escalation -> all the region's active Regional Managers (including those who already had the reminders); if the region has none (or the activity has no region), Management and Owner/Admin. If even that is empty it is recorded (`escalation_no_recipient`) and settled.
-- The daily Service Manager digest (`lib/serviceDigest.ts`) is unchanged.
+**Recipients (mapping A).** What the database has: the assigned engineer (`Complaint.assignedToId`; only field engineers can be assigned) and region -> managers through `RegionManager`
+(many managers per region; `regional_manager` and `service_manager` roles). There is no per-ticket / per-site "responsible" or "assigned" manager and no manager hierarchy, so both Regional Manager
+references mean *the active Regional Managers mapped to the ticket's site region*. No field or migration was added.
+- Reminders -> the assigned engineer (tickets only) + the region's active Regional Managers + the region's active Service Managers (de-duplicated; inactive users never). With none: `no_recipient` (dashboard flag, retried every run).
+- Escalation -> all the region's active Regional Managers (including those who already had the reminders). **Management and Owner/Admin are told ONLY when the region has no active Regional Manager** (or the activity has no region). If even that is empty it is recorded (`escalation_no_recipient`) and settled.
+- The daily Service Manager digest is unchanged apart from using the Indian day.
 
-**No duplicates:** the once-per-UTC-day claim (`lastAttemptAt`, conditional update) covers the due-date and every daily reminder; each delivery is an event per recipient, a recipient who got today's message is skipped on a retry,
-5 failed attempts per recipient per day at most; the escalation is claimed with a lease (`escalationClaimedAt`) and a conditional update on `escalationLevel`, so overlapping runs deliver it once; a partly failed escalation
-retries only the people who were not reached.
+**No duplicates:** the once-per-Indian-day claim (`lastAttemptAt` against 00:00 IST, conditional update) covers the due-date and every daily reminder; each delivery is an event per recipient (carrying the Indian date), a recipient who got today's message is skipped on a retry,
+at most 5 failed attempts per recipient per day; the escalation is claimed with a lease (`escalationClaimedAt`) and a conditional update on `escalationLevel`, so overlapping runs deliver it once; a partly failed escalation retries only the people not yet reached.
 
-**Code:** `lib/reminders.ts` (`reminderRecipients`, `escalationRecipients`, `liveDueDate`, step 3b / 4), `packages/shared/src/serviceReminder.ts` (`escalationDue` on the due date, `dueDayReached`, level 1),
-e-mail template wording ("Due today", "ESCALATION ... N hours after its due date"), Settings / Reminders screens. Cron: `/reminders/cron/run` at 04:00 UTC with the existing `CRON_SECRET` check; each run writes one log line (`logCronRun`).
-**Tests:** `apps/api/test/db/remindersPolicy.db.test.ts` (25, real database, simulated time), `reminders.db.test.ts`, `reminders.test.ts`, `packages/shared/test/serviceReminder.test.ts`, `apps/admin-web/test/reminderScreens.test.ts`, `emailTemplates.test.ts`.
+**Code:** `lib/reminders.ts` (`reminderRecipients`, `escalationRecipients`, `liveDueDate`, steps 2 / 3b / 4), `lib/serviceDigest.ts`, the shared `serviceReminder.ts`, e-mail wording ("Due today", "ESCALATION ... N hours after its due date", no "please acknowledge"), the Settings and Reminders screens.
+Cron: `/reminders/cron/run` at 04:00 UTC with the existing `CRON_SECRET` check; each run writes one log line (`logCronRun`).
+**Tests:** `apps/api/test/db/remindersPolicy.db.test.ts` (27, real database, simulated clock, including the IST boundaries), `reminders.db.test.ts`, `reminders.test.ts`, `serviceDigest.test.ts`, `emailTemplates.test.ts`, `packages/shared/test/serviceReminder.test.ts`, `apps/admin-web/test/reminderScreens.test.ts`.
 
-**Still open (business decisions, defaults above are what the code does today):**
-1. Should Management also be told (the old second level)? Today only the region's Regional Managers - and Management only as the fallback when the region has none.
-2. Should Service Managers keep receiving reminders? Today yes (they are the R6 requirement's region-wise recipients), in addition to the engineer and the Regional Managers.
-3. Time basis: UTC calendar days and due date = UTC midnight. India time would shift the escalation by 5.5 hours.
-4. Acknowledgement (an existing feature) still stops reminders and escalation before the ticket is resolved - the policy says "until resolved".
-5. If "responsible" and "assigned" Regional Manager must be different people, a primary-manager flag on `RegionManager` (or a manager field on the ticket) is needed: a migration plus screens.
+**Decisions confirmed by the project owner (2026-11-10):**
+1. Management receives the escalation only when the ticket's region has no active Regional Manager.
+2. Service Managers keep receiving reminders alongside the assigned engineer and the active Regional Managers.
+3. India Standard Time is the business time zone for due dates, reminders and escalation.
+4. Acknowledgement does not stop reminders or escalation; they continue until the ticket is resolved or closed.
+5. Mapping A: all active Regional Managers mapped to the ticket's region; no new database field or migration to separate "responsible" and "assigned" managers.
+
+**Still not done / not verified:** nothing here has run in production (policy off, SMTP and WhatsApp unverified, release order in `docs/DEPLOYMENT_RUNBOOK.md`).

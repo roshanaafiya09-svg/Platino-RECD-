@@ -80,7 +80,7 @@ function Dashboard() {
     setNotice(null);
     try {
       await api(`/reminders/${row.reminder.id}/acknowledge`, { method: "POST" });
-      setNotice(`Acknowledged ${row.activityRef}.`);
+      setNotice(`Acknowledged ${row.activityRef}. Reminders and escalation continue until it is resolved or closed.`);
       load();
     } catch (err) {
       setError(friendlyApiMessage(err, "Could not acknowledge this reminder. Please try again."));

@@ -66,6 +66,8 @@ test("service_reminder: the due-date reminder says it is due TODAY (not overdue,
   assert.ok(!today.text.includes("OVERDUE"));
   assert.ok(!today.text.includes("Days overdue"));
   assert.ok(!today.text.includes("Due soon"));
+  assert.match(today.text, /Reminders continue every day until the ticket is resolved or closed/, "it no longer asks for an acknowledgement: acknowledging does not stop reminders");
+  assert.ok(!today.text.includes("acknowledge this reminder"));
 });
 
 test("service_reminder_escalated: says it is an ESCALATION, how many hours after the due date, and asks the manager to follow up; escapes its fields", () => {

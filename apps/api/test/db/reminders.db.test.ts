@@ -355,7 +355,7 @@ const skip = isolated
   // Acknowledgement and escalation
   // ------------------------------------------------------------------------------------------
 
-  test("acknowledgement: recorded with who and when; simultaneous acknowledgements record one; an acknowledged reminder is not escalated", async () => {
+  test("acknowledgement: recorded with who and when; simultaneous acknowledgements record one; an acknowledged reminder is STILL escalated (acknowledging does not stop it)", async () => {
     await setPolicy(3, 1440); // not escalated yet when it is acknowledged
     const t = await makeTicket(W.northCo, off(-2));
     await runReminderJob(new Date());
@@ -366,9 +366,10 @@ const skip = isolated
     const r = await reminderOf(t.ticket.id);
     assert.equal(r.status, "acknowledged");
     assert.ok(r.acknowledgedAt && r.acknowledgedById);
-    await setPolicy(3, 24); // now the escalation (24 h after the due date, 2 days ago) IS due - but the reminder was acknowledged
+    await setPolicy(3, 24); // now the escalation (24 h after the due date, 2 days ago) IS due - and acknowledging does not stop it
     await runReminderJob(new Date());
-    assert.equal((await reminderOf(t.ticket.id)).escalationLevel, 0);
+    const after = await reminderOf(t.ticket.id);
+    assert.deepEqual([after.status, after.escalationLevel], ["acknowledged", 1], "still escalated, and still shown as acknowledged");
     // outside the region / wrong roles
     const southT = await makeTicket(W.southCo, off(-2));
     await runReminderJob(new Date());

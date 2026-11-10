@@ -88,7 +88,11 @@ remindersRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVI
   });
 });
 
-/** Acknowledge a reminder. Only users who may manage tickets AND whose region scope includes the reminder's region. */
+/**
+ * Acknowledge a reminder. Only users who may manage tickets AND whose region scope includes the reminder's region.
+ * Acknowledging RECORDS who has seen it; it does NOT stop the daily reminders or the escalation - those continue until the ticket is resolved / closed
+ * (the project owner's decision for the approved R6 policy).
+ */
 remindersRouter.post("/:id/acknowledge", requirePermission(PERMISSION_KEY.MANAGE_COMPLAINTS), async (req: AuthenticatedRequest, res) => {
   if (req.auth!.customerId || req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
   const id = asString(req.params.id);

@@ -159,11 +159,11 @@ export function renderEmail(templateKey: string, data: Record<string, unknown>):
           : `Due soon: ${what}`;
     return {
       subject: `${BRAND} — ${escalated ? "ESCALATED reminder" : "Service reminder"}: ${data.activityRef ?? ""}`,
-      text: [heading, "", ...lines, "", "Please acknowledge this reminder in the Platino RECD Tracker."].join("\n"),
+      text: [heading, "", ...lines, "", "Please follow up on this in the Platino RECD Tracker. Reminders continue every day until the ticket is resolved or closed."].join("\n"),
       html: wrap(`
         <p style="font-weight: 700;">${escapeHtml(heading)}</p>
         ${lines.map((l) => `<div>${escapeHtml(l)}</div>`).join("")}
-        <p style="color: #6b7280; font-size: 13px;">Please acknowledge this reminder in the Platino RECD Tracker.</p>
+        <p style="color: #6b7280; font-size: 13px;">Please follow up on this in the Platino RECD Tracker. Reminders continue every day until the ticket is resolved or closed.</p>
       `),
     };
   }

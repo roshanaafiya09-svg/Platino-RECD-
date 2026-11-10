@@ -133,3 +133,17 @@ test("each listed ticket carries customer, site and serial (\"not recorded\" whe
   assert.ok(m.text.includes("serial SN-001") && m.text.includes("serial not recorded"));
   assert.ok(m.html.includes("Plant &lt;1&gt;") && !m.html.includes("Plant <1>"));
 });
+
+test("India time: a ticket counts as overdue only once its Indian due date has passed (00:00 IST = 18:30 UTC), not at UTC midnight", async () => {
+  tickets = [ticket("T-9", "r1", { dueDate: day("2026-10-21") })]; // due on the Indian date 21 October
+  await run(new Date("2026-10-21T18:29:00.000Z")); // 23:59 IST on the 21st
+  const before = sends.filter((s) => s.to === "sm1");
+  assert.equal(before.length, 1);
+  assert.equal(before[0].data.overdueCount, 0, "still the due date in India (even though it is already 18:29 UTC): not overdue");
+  assert.equal(before[0].data.tickets[0].overdue, false);
+  sends = []; logs = [];
+  await run(new Date("2026-10-21T18:30:00.000Z")); // 00:00 IST on the 22nd
+  const after = sends.filter((s) => s.to === "sm1");
+  assert.equal(after[0].data.overdueCount, 1, "the whole Indian due day has passed");
+  assert.equal(after[0].data.tickets[0].overdue, true);
+});

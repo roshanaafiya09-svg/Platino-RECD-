@@ -11,7 +11,7 @@
  *   ACCEPTED counts), so a second run the same day does not repeat it and a failed one is retried by the next run.
  * - A failure here never throws into the caller; it is logged and counted.
  */
-import { TICKET_FINISHED_STATUSES } from "@recd/shared";
+import { TICKET_FINISHED_STATUSES, businessDate, businessDayStart, dueDateKey } from "@recd/shared";
 import { prisma } from "./prisma";
 import { firstLineRecipients } from "./reminders";
 import { send as sendNotification } from "../services/notifications/notificationService";
@@ -27,12 +27,13 @@ export interface DigestResult {
   failed: number;
 }
 
-const dayStart = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 
 export async function runServiceDigest(now: Date = new Date()): Promise<DigestResult> {
   const result: DigestResult = { enabled: process.env.SERVICE_DIGEST_ENABLED === "1", regions: 0, sent: 0, skippedAlreadySent: 0, failed: 0 };
   if (!result.enabled) return result;
-  const today = dayStart(now);
+  // The business day is the Indian calendar day: "today" began at 00:00 IST, and a due date (an Indian date stored at UTC midnight) is overdue once that date is before today's.
+  const todayKey = businessDate(now);
+  const today = businessDayStart(todayKey);
 
   const regions = await prisma.region.findMany({ select: { id: true, name: true } });
   for (const region of regions) {
@@ -47,7 +48,8 @@ export async function runServiceDigest(now: Date = new Date()): Promise<DigestRe
       if (recipients.ids.length === 0) continue;
       result.regions++;
 
-      const overdue = tickets.filter((t) => t.dueDate && t.dueDate < today);
+      const isOverdue = (t: { dueDate: Date | null }) => { const k = dueDateKey(t.dueDate); return k !== null && k < todayKey; };
+      const overdue = tickets.filter(isOverdue);
       const listed = [...overdue, ...tickets.filter((t) => !overdue.includes(t))].slice(0, MAX_LISTED).map((t) => ({
         ticketNumber: t.ticketNumber,
         customerName: t.customer.name,
@@ -55,7 +57,7 @@ export async function runServiceDigest(now: Date = new Date()): Promise<DigestRe
         serialNo: t.unit?.serialNo ?? null,
         status: t.status,
         dueDate: t.dueDate ? t.dueDate.toISOString().slice(0, 10) : null,
-        overdue: !!t.dueDate && t.dueDate < today,
+        overdue: isOverdue(t),
         openDays: Math.floor((now.getTime() - t.createdAt.getTime()) / 86_400_000),
       }));
       const data = { regionName: region.name, regionId: region.id, openCount: tickets.length, overdueCount: overdue.length, tickets: listed, listedCount: listed.length };
