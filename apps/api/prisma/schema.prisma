@@ -52,6 +52,7 @@ model RolePermission {
   permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
+  @@index([permissionId])
 }
 
 model User {
@@ -117,6 +118,9 @@ model User {
   amcVisitsCreated           AmcVisit[]                 @relation("AmcVisitCreator")
   complaintEvents            ComplaintEvent[]           @relation("ComplaintEventActor")
   serialCorrections          RecdUnitSerialHistory[]    @relation("SerialCorrectionActor")
+  @@index([roleId])
+  @@index([customerId])
+  @@index([vendorId])
 }
 
 /// Login one-time codes (customer login and phone-only login). `code` holds an HMAC, never the code itself.
@@ -161,6 +165,7 @@ model Customer {
   reminders      ServiceReminder[]
   amcOrders      AmcOrder[]
   vendorAmcs     VendorAmc[]
+  @@index([salesOwnerId])
 }
 
 /// External erection subcontractor. Not part of Platino. Self-registers, is approved by
@@ -254,6 +259,8 @@ model Order {
   lineItems OrderLineItem[]
 
   @@index([customerId, poNumber])
+  @@index([productId])
+  @@index([salesEngineerId])
 }
 
 /// A second (or third...) RECD product added to an existing order/site, for when multiple
@@ -270,6 +277,8 @@ model OrderLineItem {
   quantity  Int
   createdAt DateTime   @default(now())
   units     RecdUnit[]
+  @@index([orderId])
+  @@index([productId])
 }
 
 model Site {
@@ -337,6 +346,11 @@ model Site {
   /// Service region (drives which Regional Manager is reminded/escalated to).
   regionId String?
   region   Region? @relation(fields: [regionId], references: [id])
+  @@index([assignedEngineerId])
+  @@index([currentStageId])
+  @@index([regionId])
+  @@index([structureTypeId])
+  @@index([vendorId])
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +367,7 @@ model SiteContact {
   /// Free-text role/designation at the site, e.g. "Security head", "Facility manager".
   role      String?
   createdAt DateTime @default(now())
+  @@index([siteId])
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +401,7 @@ model SiteDocumentRequirement {
   createdAt         DateTime                @default(now())
 
   @@unique([siteId, requirementTypeId])
+  @@index([requirementTypeId])
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +424,7 @@ model RecdDelivery {
   actualDate     DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  @@index([productId])
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +479,9 @@ model SiteStageEvent {
   createdById       String
   createdBy         User            @relation(fields: [createdById], references: [id])
   createdAt         DateTime        @default(now())
+  @@index([siteId])
+  @@index([stageDefinitionId])
+  @@index([statusOptionId])
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +509,8 @@ model SitePhoto {
   uploadedById String
   uploadedBy   User            @relation(fields: [uploadedById], references: [id])
   uploadedAt   DateTime        @default(now())
+  @@index([checkpointId])
+  @@index([siteId])
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +540,7 @@ model StructureTemplateExample {
   notes           String?
   uploadedById    String
   uploadedAt      DateTime      @default(now())
+  @@index([structureTypeId])
 }
 
 // ---------------------------------------------------------------------------
@@ -549,6 +572,8 @@ model PendingAction {
   resolution      String?
   createdAt       DateTime               @default(now())
   resolvedAt      DateTime?
+  @@index([siteId])
+  @@index([ownerUserId])
 }
 
 // ---------------------------------------------------------------------------
@@ -619,6 +644,8 @@ model Complaint {
   @@index([unitId])
   @@index([dueDate])
   @@index([archivedAt])
+  @@index([customerId])
+  @@index([assignedToId])
 }
 
 /// Append-only ticket history: creation, status changes, assignment, escalation.
@@ -681,6 +708,7 @@ model AmcOrder {
   serviceReports ServiceReport[]
   visits         AmcVisit[]
   renewals       AmcRenewal[]
+  @@index([customerId])
 }
 
 /// Join row: one RECD unit covered by one AMC order. A unit can be covered by successive
@@ -919,6 +947,8 @@ model RecdUnit {
   @@index([orderId])
   @@index([siteId])
   @@index([warrantyEndDate])
+  @@index([lineItemId])
+  @@index([productId])
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,6 +1219,9 @@ model ServiceReminder {
   @@index([status])
   @@index([regionId, status])
   @@index([dueDate])
+  @@index([customerId])
+  @@index([siteId])
+  @@index([unitId])
 }
 
 /// Append-only history of a reminder: creation, each delivery attempt (per recipient and channel), acknowledgement,
