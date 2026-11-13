@@ -87,8 +87,8 @@ test("users page: unavailable row actions are disabled with the reason, in both 
 
 test("users page: e-mail is checked and normalised before submit on create and edit; the existing phone check and password-reset confirmation remain", () => {
   assert.equal((page.match(/checkEmailInput\(/g) ?? []).length, 2);
-  assert.match(page, /mobileFieldError\(form\.phone\)/);
-  assert.match(page, /mobileFieldError\(editForm\.phone\)/);
+  assert.match(page, /optionalMobileFieldError\(form\.phone\)/);
+  assert.match(page, /optionalMobileFieldError\(editForm\.phone\)/);
   assert.match(page, /Generate a new temporary password for/);
   assert.match(page, /data-testid="users-mobile-cards"/, "the responsive card list is still there");
 });

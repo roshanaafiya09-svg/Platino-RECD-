@@ -117,9 +117,10 @@ function Dashboard() {
       </div>
 
       {data && !data.policy.remindersEnabled && (
-        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="reminders-off">
-          Reminders are switched OFF: nothing is sent or escalated until the reminder policy is filled in under Settings. You can still see what is pending or overdue.
-        </p>
+        <div role="alert" className="flex items-start gap-3 rounded-lg border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-amber-900 shadow-sm" data-testid="reminders-off">
+          <span aria-hidden="true" className="text-lg leading-6">⚠</span>
+          <p className="text-sm font-semibold leading-6">Reminders are switched OFF: nothing is sent or escalated until the reminder policy is filled in under Settings. You can still see what is pending or overdue.</p>
+        </div>
       )}
       {data && data.policy.remindersEnabled && (
         <p className="text-xs text-gray-500">

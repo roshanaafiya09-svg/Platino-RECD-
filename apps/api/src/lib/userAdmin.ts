@@ -91,7 +91,8 @@ async function requireAssociationTargets(tx: Prisma.TransactionClient | typeof p
 export interface CreateUserInput {
   name: string;
   email: string;
-  phone: string;
+  /** Optional: no number is stored as null (never a placeholder). */
+  phone?: string;
   roleKey: string;
   title?: string;
   vendorId?: string;
@@ -109,7 +110,7 @@ export async function createUser(actor: Actor, input: CreateUserInput) {
     await requireAssociationTargets(prisma, plan.vendorId, plan.customerId);
 
     // Any user holding this number in any accepted stored format counts (staff, customer contact, vendor login).
-    if (await phoneHeldByAnother(input.phone)) throw new UserAdminError(409, PHONE_IN_USE, "PHONE_IN_USE");
+    if (input.phone && (await phoneHeldByAnother(input.phone))) throw new UserAdminError(409, PHONE_IN_USE, "PHONE_IN_USE");
 
     const tempPassword = generateTempPassword();
     const passwordHash = await bcrypt.hash(tempPassword, 10);
@@ -121,7 +122,7 @@ export async function createUser(actor: Actor, input: CreateUserInput) {
           data: {
             name: input.name,
             email,
-            phone: input.phone,
+            phone: input.phone || null,
             title: input.title?.trim() || null,
             roleId: role.id,
             vendorId: plan.vendorId,

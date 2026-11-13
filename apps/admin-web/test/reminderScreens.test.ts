@@ -185,3 +185,14 @@ test("settings: the approved workflow (2 days before, due date, daily, escalatio
   assert.doesNotMatch(handler, /api\(/);
   assert.match(settingsComp, /reminders stay off, until the policy is saved/);
 });
+
+test("dashboard: the OFF notice is driven by the backend's policy flag, carries the exact wording and leaves the counts and rows visible", () => {
+  const exact = "Reminders are switched OFF: nothing is sent or escalated until the reminder policy is filled in under Settings. You can still see what is pending or overdue.";
+  assert.ok(dash.includes(exact));
+  assert.match(dash, /data && !data\.policy\.remindersEnabled && \(\s*<div role="alert"[^>]*data-testid="reminders-off"/);
+  assert.equal(dash.split("remindersEnabled").length > 2, true);
+  assert.doesNotMatch(dash, /remindersEnabled\s*=\s*(true|false)/, "no hardcoded state");
+  // the notice is a sibling of the counts and table, not a replacement for them
+  assert.match(dash, /data-testid="reminder-counts"/);
+  assert.match(dash, /\["Overdue", data\.counts\.overdue/);
+});

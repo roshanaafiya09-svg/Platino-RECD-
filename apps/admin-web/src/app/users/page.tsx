@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
 import { apiErrorMessage } from "@/lib/apiError";
-import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
+import { cleanOptionalMobile, optionalMobileFieldError } from "@/lib/mobileInput";
 import { DataTable } from "@/components/DataTable";
 import { useAuth } from "@/components/AuthContext";
 import { checkEmailInput, roleNeedsVendor, roleOptionsFor, rowActionsFor, userAdminErrorMessage, vendorRequiredOnEdit } from "@/lib/userAdminUi";
@@ -141,14 +141,14 @@ export default function UsersPage() {
     setTempPassword(null);
     setSuccess(null);
     // Same shared rule the server applies (spaces, hyphens, +91 / 0 prefixes are fine); the API still validates on its own.
-    const phoneError = mobileFieldError(form.phone);
+    const phoneError = optionalMobileFieldError(form.phone);
     if (phoneError) return setError(phoneError);
     const emailCheck = checkEmailInput(form.email);
     if (!emailCheck.ok) return setError(emailCheck.error);
     try {
       const result = await api<{ tempPassword: string }>("/users", {
         method: "POST",
-        body: JSON.stringify({ ...form, email: emailCheck.email, phone: cleanMobile(form.phone), vendorId: roleNeedsVendor(form.roleKey) ? form.vendorId || undefined : undefined }),
+        body: JSON.stringify({ ...form, email: emailCheck.email, phone: cleanOptionalMobile(form.phone), vendorId: roleNeedsVendor(form.roleKey) ? form.vendorId || undefined : undefined }),
       });
       setTempPassword(result.tempPassword);
       setForm({ name: "", email: "", roleKey: "", phone: "", title: "", vendorId: "" });
@@ -178,7 +178,7 @@ export default function UsersPage() {
     if (!editUser) return;
     setEditLoading(true);
     setEditError(null);
-    const phoneError = mobileFieldError(editForm.phone);
+    const phoneError = optionalMobileFieldError(editForm.phone);
     if (phoneError) {
       setEditLoading(false);
       return setEditError(phoneError);
@@ -190,7 +190,7 @@ export default function UsersPage() {
     }
     try {
       // Only what the person can legitimately change is sent: the vendor only for a vendor-scoped role, and only when it changed.
-      const body: Record<string, unknown> = { name: editForm.name, email: emailCheck.email, phone: cleanMobile(editForm.phone), title: editForm.title };
+      const body: Record<string, unknown> = { name: editForm.name, email: emailCheck.email, phone: cleanOptionalMobile(editForm.phone), title: editForm.title };
       if (editForm.roleKey !== editUser.role.key) body.roleKey = editForm.roleKey;
       if (roleNeedsVendor(editForm.roleKey) && editForm.vendorId !== (editUser.vendorId ?? "")) body.vendorId = editForm.vendorId || null; // an unchanged vendor (including none) is never sent
       await api(`/users/${editUser.id}`, { method: "PUT", body: JSON.stringify(body) });
@@ -302,9 +302,8 @@ export default function UsersPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Mobile no.</label>
+            <label className="block text-xs text-gray-500 mb-1">Mobile no. <span className="text-gray-400">(optional)</span></label>
             <input
-              required
               type="tel"
               inputMode="numeric"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
@@ -577,9 +576,8 @@ export default function UsersPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Mobile no.</label>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Mobile no. <span className="text-gray-400">(optional)</span></label>
                   <input
-                    required
                     type="tel"
                     inputMode="numeric"
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"

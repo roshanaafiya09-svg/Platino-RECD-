@@ -88,7 +88,7 @@ const send = async (method: string, path: string, body: unknown) => {
   return { status: res.status, body: text ? JSON.parse(text) : null };
 };
 let emailSeq = 0;
-const create = (phone: string) => send("POST", "/", { name: "New Person", email: `n${++emailSeq}@example.test`, roleKey: ROLE_KEY.SALES, phone });
+const create = (phone?: string) => send("POST", "/", { name: "New Person", email: `n${++emailSeq}@example.test`, roleKey: ROLE_KEY.SALES, phone });
 const MSG = /already used by another user/;
 
 test("a number held by a customer contact in the legacy +91 form is a duplicate for a staff user (409, nothing created)", async () => {
@@ -155,7 +155,7 @@ test("a free number is accepted in every supported spelling and stored as 10 dig
 
 test("invalid numbers are still a 400 with the standard message (the duplicate check never runs for them)", async () => {
   seed("a", "9876500001");
-  for (const bad of ["12345", "5876543210", "98765abcde", "+14155552671", ""]) {
+  for (const bad of ["12345", "5876543210", "98765abcde", "+14155552671"]) {
     const r = await create(bad);
     assert.equal(r.status, 400, bad);
     assert.match(JSON.stringify(r.body), /Enter a valid 10-digit Indian mobile number/);
@@ -195,4 +195,34 @@ test("only a PHONE conflict is translated: other database errors stay errors", a
   assert.doesNotMatch(emailClash.body.error, /mobile/);
   writeFailure = null;
   assert.equal((await create("9876543288")).status, 201);
+});
+
+test("a user can be created with no mobile number (blank, null or left out): stored as null, no duplicate check, never a dummy number", async () => {
+  seed("existing", "9876500001");
+  for (const phone of [undefined, "", "   "]) {
+    const r = await create(phone);
+    assert.equal(r.status, 201, String(phone));
+  }
+  assert.equal((await send("POST", "/", { name: "N", email: "nullphone@example.test", roleKey: ROLE_KEY.SALES, phone: null })).status, 201);
+  const created = rows.filter((r) => r.id.startsWith("new"));
+  assert.equal(created.length, 4);
+  assert.ok(created.every((r) => r.phone === null));
+});
+
+test("a mobile number that IS given is still validated and still checked for duplicates", async () => {
+  assert.equal((await create("12345")).status, 400);
+  assert.equal((await create("+91 98765 00077")).status, 201);
+  assert.equal(rows[0].phone, "9876500077");
+  assert.equal((await create("9876500077")).status, 409);
+});
+
+test("editing a user without a number works, a blank phone never wipes an existing number, and a number can be added", async () => {
+  const none = seed("none", null);
+  const has = seed("has", "9876500055");
+  assert.equal((await send("PUT", `/${none.id}`, { name: "Renamed", phone: "" })).status, 200);
+  assert.equal(none.phone, null);
+  assert.equal((await send("PUT", `/${has.id}`, { name: "Renamed too", phone: "" })).status, 200);
+  assert.equal(has.phone, "9876500055");
+  assert.equal((await send("PUT", `/${none.id}`, { phone: "98765 00066" })).status, 200);
+  assert.equal(none.phone, "9876500066");
 });

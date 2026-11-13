@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { INDIAN_MOBILE_MESSAGE } from "@recd/shared";
 import { apiErrorMessage } from "../src/lib/apiError";
-import { cleanMobile, mobileFieldError } from "../src/lib/mobileInput";
+import { cleanMobile, cleanOptionalMobile, mobileFieldError, optionalMobileFieldError } from "../src/lib/mobileInput";
 
 const page = readFileSync(resolve(__dirname, "../src/app/users/page.tsx"), "utf8");
 
@@ -31,10 +31,11 @@ test("the staff form rejects invalid numbers with the standard message, and an e
 test("the Add user and Edit user phone inputs no longer carry a browser pattern that is stricter than the server", () => {
   assert.doesNotMatch(page, /pattern=/);
   assert.match(page, /type="tel"/);
-  assert.match(page, /mobileFieldError\(form\.phone\)/);
-  assert.match(page, /mobileFieldError\(editForm\.phone\)/);
-  assert.match(page, /cleanMobile\(form\.phone\)/);
-  assert.match(page, /cleanMobile\(editForm\.phone\)/);
+  assert.match(page, /optionalMobileFieldError\(form\.phone\)/);
+  assert.match(page, /optionalMobileFieldError\(editForm\.phone\)/);
+  assert.match(page, /cleanOptionalMobile\(form\.phone\)/);
+  assert.match(page, /cleanOptionalMobile\(editForm\.phone\)/);
+  assert.doesNotMatch(page, /required\s+type="tel"/, "the mobile inputs are not browser-required");
 });
 
 test("every error on the Users page goes through the API error helper (no raw err.message)", () => {
@@ -53,4 +54,15 @@ test("the duplicate-phone message reads naturally, without surrounding quotation
   // validation errors keep their field wording
   const zod = new Error(JSON.stringify({ formErrors: [], fieldErrors: { phone: [INDIAN_MOBILE_MESSAGE] } }));
   assert.equal(apiErrorMessage(zod, "x"), `phone: ${INDIAN_MOBILE_MESSAGE}`);
+});
+
+test("Add/Edit user: the mobile number is optional - blank is accepted and not sent, a typed number is still validated", () => {
+  for (const blank of ["", "   "]) {
+    assert.equal(optionalMobileFieldError(blank), null);
+    assert.equal(cleanOptionalMobile(blank), undefined);
+  }
+  assert.equal(optionalMobileFieldError("+91 98765-43210"), null);
+  assert.equal(cleanOptionalMobile("+91 98765-43210"), "9876543210");
+  for (const v of REJECTED) assert.equal(optionalMobileFieldError(v), INDIAN_MOBILE_MESSAGE, v);
+  assert.doesNotMatch(page, /Mobile number is required/);
 });

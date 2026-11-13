@@ -8,6 +8,7 @@ import {
   addOrderLineItemSchema,
   createAmcOrderSchema,
   createUserSchema,
+  updateUserSchema,
   correctRecdSerialSchema,
 } from "../src/schemas";
 import { canCorrectSerial, ROLE_KEY } from "../src/constants";
@@ -57,10 +58,17 @@ test("addOrderLineItemSchema enforces serial count", () => {
   assert.equal(addOrderLineItemSchema.safeParse({ productId: "p", quantity: 2, recdSerials: ["Z-1X"] }).success, false);
 });
 
-test("createUserSchema makes mobile mandatory and normalises it", () => {
+test("createUserSchema: mobile is optional, normalised when given and still validated", () => {
   const ok = createUserSchema.parse({ name: "A", email: "a@b.co", roleKey: "regional_manager", phone: "+91 98849 77994" });
   assert.equal(ok.phone, "9884977994");
-  assert.equal(createUserSchema.safeParse({ name: "A", email: "a@b.co", roleKey: "sales" }).success, false);
+  for (const phone of [undefined, null, "", "   "]) {
+    const r = createUserSchema.safeParse({ name: "A", email: "a@b.co", roleKey: "sales", ...(phone === undefined ? {} : { phone }) });
+    assert.equal(r.success, true, String(phone));
+    assert.equal(r.success && r.data.phone, undefined, "no number is never replaced by a dummy value");
+  }
+  assert.equal(updateUserSchema.parse({ phone: "" }).phone, undefined);
+  assert.equal(updateUserSchema.parse({ phone: "98849 77994" }).phone, "9884977994");
+  assert.equal(updateUserSchema.safeParse({ phone: "12" }).success, false);
   assert.equal(createUserSchema.safeParse({ name: "A", email: "a@b.co", roleKey: "sales", phone: "12" }).success, false);
 });
 

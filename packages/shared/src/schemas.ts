@@ -38,6 +38,15 @@ export const indianMobileSchema = z
   });
 
 /**
+ * An OPTIONAL mobile number: left out, null or blank (spaces only) means "no number" (stored as nothing, never a dummy
+ * value); anything else must pass the normal Indian mobile rule and is normalised to 10 digits.
+ */
+export const optionalIndianMobileSchema = z.preprocess(
+  (v) => (v === null || (typeof v === "string" && v.trim() === "") ? undefined : v),
+  indianMobileSchema.optional(),
+);
+
+/**
  * The ways one 10-digit mobile number may already be stored in older rows (before numbers were
  * normalised on save): bare, +91, 91 or 0 prefixed. Used to find an existing record for a
  * normalised number - e.g. a customer login, or a duplicate-number check.
@@ -307,8 +316,8 @@ export const createUserSchema = z.object({
   name: z.string().trim().min(1),
   email: emailField,
   roleKey: z.string(),
-  /** Mandatory: it is the contact number for reminders/OTP. Normalised to 10 digits. */
-  phone: indianMobileSchema,
+  /** Optional: blank means "no mobile number". When given it is checked and normalised to 10 digits. */
+  phone: optionalIndianMobileSchema,
   title: z.string().optional(),
   /** Required when adding an erection engineer who belongs to an approved vendor. */
   vendorId: z.string().optional(),
@@ -320,7 +329,8 @@ export const updateUserSchema = z.object({
   name: z.string().trim().min(1).optional(),
   email: emailField.optional(),
   roleKey: z.string().optional(),
-  phone: indianMobileSchema.optional(),
+  /** Blank / null is ignored (an existing number is never cleared by an empty box); a given number is validated. */
+  phone: optionalIndianMobileSchema,
   title: z.string().optional(),
   /** undefined = keep, null = remove, string = set (validated against the destination role by the server). */
   vendorId: z.string().nullable().optional(),

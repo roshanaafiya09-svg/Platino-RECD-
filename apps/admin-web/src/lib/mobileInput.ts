@@ -16,3 +16,14 @@ export function cleanMobile(value: string): string {
   if (!n) throw new Error(INDIAN_MOBILE_MESSAGE);
   return n;
 }
+
+/** Same check for an OPTIONAL mobile field: blank is fine; anything typed must be a valid number. */
+export function optionalMobileFieldError(value: string): string | null {
+  if (!value.trim()) return null;
+  return normalizeIndianMobile(value) ? null : INDIAN_MOBILE_MESSAGE;
+}
+
+/** The 10-digit form for an optional field, or undefined when left blank (so the field is simply not sent). */
+export function cleanOptionalMobile(value: string): string | undefined {
+  return value.trim() ? cleanMobile(value) : undefined;
+}
