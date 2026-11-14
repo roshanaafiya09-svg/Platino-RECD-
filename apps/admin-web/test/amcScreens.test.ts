@@ -116,8 +116,9 @@ test("settings component writes to the AMC endpoint, empty means default, and it
   assert.match(guard, /"\/settings": \["manage_settings"\]/);
 });
 
-test("navigation and route guard: the vendor AMC page needs the AMC permission", () => {
-  assert.match(nav, /href: "\/vendor-amcs"/);
+test("navigation and route guard: the vendor AMC page needs the AMC permission (menu entry temporarily hidden, route kept)", () => {
+  assert.doesNotMatch(nav, /^\s*href: "\/vendor-amcs"/m, "Vendor AMC is hidden from the menus");
+  assert.match(nav, /href: "\/amc-orders"/, "Customer AMC stays in the menu");
   assert.match(nav, /"\/vendor-amcs": \["manage_amc_orders"\]/);
   assert.match(guard, /"\/vendor-amcs": \["manage_amc_orders"\]/);
 });

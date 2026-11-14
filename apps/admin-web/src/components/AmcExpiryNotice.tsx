@@ -94,8 +94,9 @@ export default function AmcExpiryNotice({ userId, canOpenAmc }: { userId: string
         </ul>
         {truncated && <p className="mt-2 text-xs text-gray-500">More contracts need attention than are listed here.</p>}
         <div className="mt-4 flex justify-end gap-3">
-          {canOpenAmc && (
-            <Link href={alerts.some((a) => a.kind === "customer") ? "/amc-orders" : "/vendor-amcs"} onClick={dismiss} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50" data-testid="amc-notice-open">Open AMC</Link>
+          {/* The Vendor AMC shortcut is temporarily hidden: "Open AMC" is offered only when a customer AMC is in the list (restore: link to "/vendor-amcs" otherwise). */}
+          {canOpenAmc && alerts.some((a) => a.kind === "customer") && (
+            <Link href="/amc-orders" onClick={dismiss} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50" data-testid="amc-notice-open">Open AMC</Link>
           )}
           <button onClick={dismiss} className="btn-primary px-4 py-2 text-sm" data-testid="amc-notice-dismiss">Dismiss</button>
         </div>
