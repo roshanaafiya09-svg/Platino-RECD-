@@ -34,6 +34,14 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/service-reports": [...SERVICE_REPORT_LIST_PERMISSIONS],
 };
 
+/**
+ * Pages TEMPORARILY switched off in the web app: hidden from the menus AND blocked when typed into the address bar (the user lands on their first
+ * accessible module instead). The page code, its API and its ROUTE_PERMISSIONS rule are untouched. To bring Vendor AMC back, empty this list and
+ * add its entry back to Nav.tsx.
+ */
+const DISABLED_ROUTES = ["/vendor-amcs"];
+const isDisabledRoute = (pathname: string) => DISABLED_ROUTES.some((r) => pathname === r || pathname.startsWith(r + "/"));
+
 // Where to send a staff user who lands on /login etc. - the first module they can actually open.
 const LANDING_PRIORITY = ["/dashboard", "/sites", "/complaints", "/orders", "/customers", "/products", "/reports", "/vendors", "/users", "/amc-orders", "/settings"];
 
@@ -115,6 +123,13 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // A temporarily disabled page (typed address or old bookmark) -> first module the user can open.
+    if (isDisabledRoute(pathname)) {
+      const landing = firstLanding(user.permissions);
+      if (landing) router.push(landing);
+      return;
+    }
+
     // Staff hitting a route they lack permission for -> send them to a route they can open.
     const matched = matchRoute(pathname);
     if (matched && !canAccess(user.permissions, matched)) {
@@ -173,6 +188,9 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   if (isLoginPage || isChangePasswordPage || isCustomerPortal) {
     return null;
   }
+
+  // Never render a temporarily disabled page (the effect above redirects).
+  if (isDisabledRoute(pathname)) return null;
 
   // Block rendering a page the user can't access (the effect above redirects them).
   const matched = matchRoute(pathname);

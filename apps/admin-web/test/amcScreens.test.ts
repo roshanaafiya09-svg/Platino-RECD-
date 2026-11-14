@@ -121,6 +121,8 @@ test("navigation and route guard: the vendor AMC page needs the AMC permission (
   assert.match(nav, /href: "\/amc-orders"/, "Customer AMC stays in the menu");
   assert.match(nav, /"\/vendor-amcs": \["manage_amc_orders"\]/);
   assert.match(guard, /"\/vendor-amcs": \["manage_amc_orders"\]/);
+  assert.match(guard, /const DISABLED_ROUTES = \["\/vendor-amcs"\]/, "typing the address is blocked too");
+  assert.match(guard, /if \(isDisabledRoute\(pathname\)\) return null;/, "the disabled page is never rendered");
 });
 
 test("Vendor AMC form: optional customer and site (the site list comes from the customer's units); sent only when chosen", () => {
