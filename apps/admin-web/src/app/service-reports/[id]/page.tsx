@@ -51,7 +51,6 @@ export default function ServiceReportPage() {
   const [report, setReport] = useState<ReportDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState({ visitDate: "", workPerformed: "", findings: "", resolution: "", partsUsed: "", remarks: "" });
-  const [ackRequired, setAckRequired] = useState(true);
   const [busy, setBusy] = useState<null | "save" | "submit" | "reopen" | "sign" | "download">(null);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [signatureImage, setSignatureImage] = useState<string | null>(null);
@@ -61,7 +60,6 @@ export default function ServiceReportPage() {
 
   const sync = useCallback((r: ReportDetail) => {
     setReport(r);
-    setAckRequired(r.acknowledgementRequired);
     setForm({ visitDate: r.visitDate, workPerformed: r.workPerformed, findings: r.findings, resolution: r.resolution, partsUsed: r.partsUsed ?? "", remarks: r.remarks ?? "" });
   }, []);
 
@@ -120,7 +118,6 @@ export default function ServiceReportPage() {
     resolution: form.resolution,
     partsUsed: form.partsUsed,
     remarks: form.remarks,
-    ...(report!.kind === "amc" ? { acknowledgementRequired: ackRequired } : {}),
   });
 
   const save = () => run("save", async () => sync(await api<ReportDetail>(`/service-reports/${id}`, { method: "PATCH", body: JSON.stringify(payload()) }).then(() => api<ReportDetail>(`/service-reports/${id}`))), "Draft saved.");
@@ -133,7 +130,7 @@ export default function ServiceReportPage() {
       const fresh = await api<ReportDetail>(`/service-reports/${id}`);
       await api(`/service-reports/${id}/submit`, { method: "POST", body: JSON.stringify({ expectedVersion: fresh.version }) });
       sync(await api<ReportDetail>(`/service-reports/${id}`));
-    }, ackRequired ? "Submitted. The customer can now review and sign this report." : "Submitted and finalised. This report carries no customer signature, as its acknowledgement was marked not required.");
+    }, "Submitted. The customer can now review and sign this report.");
   }
 
   const reopen = () =>
@@ -266,21 +263,6 @@ export default function ServiceReportPage() {
         </section>
       )}
 
-      {editable && report.kind === "amc" && (
-        <label className="flex items-start gap-2 rounded-xl border border-gray-200 bg-white p-3 text-sm text-gray-700">
-          <input type="checkbox" className="mt-1" checked={ackRequired} onChange={(e) => setAckRequired(e.target.checked)} data-testid="ack-required-toggle" />
-          <span>
-            The customer must review and sign this report.
-            <span className="block text-[11px] text-gray-400">If unticked, submitting finalises the report without a customer signature (it is then marked &ldquo;not signed&rdquo;).</span>
-          </span>
-        </label>
-      )}
-      {!editable && report.kind === "amc" && (
-        <p className="text-xs text-gray-500" data-testid="ack-rule">
-          {report.acknowledgementRequired ? "Customer acknowledgement and signature are required for this report." : "Customer acknowledgement is not required for this report."}
-        </p>
-      )}
-
       {/* Staff actions */}
       {editable && (
         <div className="flex flex-wrap gap-3" data-testid="staff-actions">
@@ -288,7 +270,7 @@ export default function ServiceReportPage() {
             {busy === "save" ? "Saving…" : "Save draft"}
           </button>
           <button onClick={submit} disabled={busy !== null || !p.canSubmit} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
-            {busy === "submit" ? "Submitting…" : ackRequired || report.kind !== "amc" ? "Submit for customer signature" : "Finalise without customer signature"}
+            {busy === "submit" ? "Submitting…" : "Submit for customer signature"}
           </button>
         </div>
       )}
@@ -327,9 +309,9 @@ export default function ServiceReportPage() {
       {/* Submitted and final, but NOT signed (AMC, acknowledgement not required) */}
       {report.status === SERVICE_REPORT_STATUS.SUBMITTED && (
         <section className="space-y-3 rounded-xl border border-gray-300 bg-gray-50 p-4" data-testid="submitted-section">
-          <h2 className="text-base font-semibold text-gray-800">Submitted and final - not signed</h2>
+          <h2 className="text-base font-semibold text-gray-800">Submitted and final - not signed (older report)</h2>
           <p className="text-sm text-gray-700">
-            Finalised on {report.submittedAt ? new Date(report.submittedAt).toLocaleString() : "-"}. Customer acknowledgement was not required, so this report carries no signature and cannot be changed.
+            Finalised on {report.submittedAt ? new Date(report.submittedAt).toLocaleString() : "-"}. This report was finalised before every report needed a customer signature, so it carries none and cannot be changed.
           </p>
           <div className="flex flex-wrap gap-3">
             <button onClick={() => download(false)} disabled={busy !== null || !report.pdfAvailable} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">

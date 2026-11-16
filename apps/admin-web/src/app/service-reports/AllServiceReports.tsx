@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { SERVICE_REPORT_KIND, SERVICE_REPORT_STATUS, SERVICE_REPORT_STATUS_LABELS, type ServiceReportStatus } from "@recd/shared";
 import { api } from "@/lib/apiClient";
 import { apiErrorMessage } from "@/lib/apiError";
 import { downloadReportPdf } from "@/lib/reportFiles";
 import { reportStatusPill } from "@/lib/serviceReportUi";
 import { useAuth } from "@/components/AuthContext";
-import { EMPTY_REPORT_FILTERS, REPORT_LIST_PAGE_SIZE, pageRange, reportListQuery, reportSource, type ReportListFilters } from "@/lib/serviceReportList";
+import { EMPTY_REPORT_FILTERS, REPORT_LIST_PAGE_SIZE, cleanReportId, pageRange, reportListQuery, reportSource, type ReportListFilters } from "@/lib/serviceReportList";
 
 interface Row {
   id: string;
@@ -16,6 +17,9 @@ interface Row {
   kind: "ticket" | "amc";
   ticketNumber: string | null;
   amc: { ref: string } | null;
+  customerId?: string;
+  siteId?: string | null;
+  unitId?: string | null;
   customerName?: string;
   siteName?: string | null;
   unitSerial?: string | null;
@@ -34,7 +38,14 @@ interface Row {
 export default function AllServiceReports() {
   const { user } = useAuth();
   const isCustomer = user?.role.key === "customer";
-  const [filters, setFilters] = useState<ReportListFilters>(EMPTY_REPORT_FILTERS);
+  // A Customer, Site or DG (RECD unit) page links here with ?customerId= / ?siteId= / ?unitId=; the API still limits the rows to what the user may see.
+  const params = useSearchParams();
+  const [filters, setFilters] = useState<ReportListFilters>({
+    ...EMPTY_REPORT_FILTERS,
+    customerId: cleanReportId(params.get("customerId")),
+    siteId: cleanReportId(params.get("siteId")),
+    unitId: cleanReportId(params.get("unitId")),
+  });
   const [typed, setTyped] = useState("");
   const [rows, setRows] = useState<Row[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -78,7 +89,7 @@ export default function AllServiceReports() {
         <p className="mt-1 text-sm text-gray-500">
           {isCustomer
             ? "Your service reports. Open one to review it and, where asked, sign it."
-            : "Service reports on tickets and AMC visits that you are allowed to see. Start a new report from the ticket or the AMC order."}
+            : "Service reports on tickets and AMC visits that you are allowed to see. To write a new report, open the service ticket (Complaints → Service reports) or the AMC order (AMC Order → Service reports, or the AMC section of a RECD unit) and start it there; every report is then signed by the customer."}
         </p>
       </div>
 
@@ -119,7 +130,14 @@ export default function AllServiceReports() {
             </select>
           </div>
           <button type="submit" className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium hover:bg-gray-50">Search</button>
-          {(filters.q || filters.status || filters.kind) && (
+          {(filters.customerId || filters.siteId || filters.unitId) && (
+            <span className="flex flex-wrap items-center gap-2 text-xs" data-testid="report-scope-filters">
+              {filters.customerId && <span className="rounded-full bg-gray-100 px-2 py-1">Customer: {rows?.[0]?.customerName ?? "selected customer"}</span>}
+              {filters.siteId && <span className="rounded-full bg-gray-100 px-2 py-1">Site: {rows?.[0]?.siteName ?? "selected site"}</span>}
+              {filters.unitId && <span className="rounded-full bg-gray-100 px-2 py-1">DG / RECD unit: {rows?.[0]?.unitSerial ?? rows?.[0]?.unitSerialNo ?? "selected unit"}</span>}
+            </span>
+          )}
+          {(filters.q || filters.status || filters.kind || filters.customerId || filters.siteId || filters.unitId) && (
             <button type="button" className="text-xs font-medium text-gray-500 hover:underline" onClick={() => { setTyped(""); setFilters(EMPTY_REPORT_FILTERS); }}>
               Clear filters
             </button>

@@ -12,3 +12,8 @@ export function isCustomerReportPath(pathname: string): boolean {
 
 /** Permissions that open the staff service-report list (any one is enough). The API still decides which reports a user may see. */
 export const SERVICE_REPORT_LIST_PERMISSIONS = ["manage_complaints", "view_complaints_overview", "act_assigned_complaints", "manage_amc_orders"] as const;
+
+/** True when the signed-in staff user holds any permission that opens the service-report list (used to offer the "Service reports" links on the Customer and Site pages). */
+export function canOpenServiceReports(hasPermission: (key: string) => boolean): boolean {
+  return SERVICE_REPORT_LIST_PERMISSIONS.some((p) => hasPermission(p));
+}

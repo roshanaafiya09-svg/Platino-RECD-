@@ -203,12 +203,15 @@ const skip = isolated
     W.signedA = await signedTicketReport(W.A, W.mgmt);
     W.signedB = await signedTicketReport(W.B, W.mgmt);
     W.draftA = await ticketReport(W.A, W.mgmt); // a new visit on the same ticket (the finished one does not block it)
-    const amc = await call(W.mgmt, "POST", "/service-reports", { amcOrderId: W.A.amc.id, unitId: W.A.unit.id, acknowledgementRequired: false, ...fields });
+    const amc = await call(W.mgmt, "POST", "/service-reports", { amcOrderId: W.A.amc.id, unitId: W.A.unit.id, ...fields });
     assert.equal(amc.status, 201, JSON.stringify(amc.body));
     const sub = await call(W.mgmt, "POST", `/service-reports/${amc.body.id}/submit`, { expectedVersion: amc.body.version });
     assert.equal(sub.status, 200, JSON.stringify(sub.body));
-    W.amcA = sub.body; // final WITHOUT a signature
-    assert.equal(W.amcA.status, "submitted");
+    assert.equal(sub.body.status, "awaiting_signature", "every report waits for the customer");
+    const signedAmc = await sign(W.A.contact, sub.body);
+    assert.equal(signedAmc.status, 200, JSON.stringify(signedAmc.body));
+    W.amcA = signedAmc.body; // final, signed by the customer
+    assert.equal(W.amcA.status, "signed");
   });
 
   const list = (as: any, query = "") => call(as, "GET", `/service-reports?q=${PREFIX}${query}`);
@@ -231,19 +234,19 @@ const skip = isolated
     assert.equal(amc.unitSerial, `${PREFIX}-A-SN`);
   });
 
-  test("an engineer sees only reports of tickets assigned to them, and no AMC reports", async () => {
-    assert.deepEqual(ids(await list(W.eng1)), new Set([W.signedA.id, W.draftA.id]));
-    assert.deepEqual(ids(await list(W.eng2)), new Set([W.signedB.id]));
+  test("an engineer sees only reports of tickets assigned to them, plus the AMC reports of a unit a ticket is assigned to them on", async () => {
+    assert.deepEqual(ids(await list(W.eng1)), new Set([W.signedA.id, W.draftA.id, W.amcA.id]), "side A: their ticket is on the unit that has the AMC report");
+    assert.deepEqual(ids(await list(W.eng2)), new Set([W.signedB.id]), "side B has no AMC report; eng2 never sees side A's");
   });
 
   test("a Regional Manager sees only their region's ticket reports; a vendor user only their vendor's sites", async () => {
-    assert.deepEqual(ids(await list(W.rm1)), new Set([W.signedA.id, W.draftA.id]), "region R1 only, and no AMC (no AMC permission)");
+    assert.deepEqual(ids(await list(W.rm1)), new Set([W.signedA.id, W.draftA.id, W.amcA.id]), "region R1 only (ticket and AMC reports - they manage tickets); side B is in another region");
     // the vendor user is a service engineer for vendor V1, but NOT assigned to the ticket -> nothing; once assigned, only V1's site is reachable
     assert.deepEqual(ids(await list(W.vendor1)), new Set());
     await prisma.complaint.update({ where: { id: W.A.ticket.id }, data: { assignedToId: W.vendor1.id } });
     await prisma.complaint.update({ where: { id: W.B.ticket.id }, data: { assignedToId: W.vendor1.id } });
     try {
-      assert.deepEqual(ids(await list(W.vendor1)), new Set([W.signedA.id, W.draftA.id]), "assigned to both tickets, but only vendor V1's site is in scope");
+      assert.deepEqual(ids(await list(W.vendor1)), new Set([W.signedA.id, W.draftA.id, W.amcA.id]), "assigned to both tickets, but only vendor V1's site is in scope");
     } finally {
       await prisma.complaint.update({ where: { id: W.A.ticket.id }, data: { assignedToId: W.eng1.id } });
       await prisma.complaint.update({ where: { id: W.B.ticket.id }, data: { assignedToId: W.eng2.id } });
@@ -259,8 +262,8 @@ const skip = isolated
   });
 
   test("filters (status, kind, customer, site, unit, free text) only ever narrow the caller's own scope", async () => {
-    assert.deepEqual(ids(await list(W.mgmt, "&status=signed")), new Set([W.signedA.id, W.signedB.id]));
-    assert.deepEqual(ids(await list(W.mgmt, "&status=submitted")), new Set([W.amcA.id]));
+    assert.deepEqual(ids(await list(W.mgmt, "&status=signed")), new Set([W.signedA.id, W.signedB.id, W.amcA.id]));
+    assert.deepEqual(ids(await list(W.mgmt, "&status=submitted")), new Set(), "no report can be finalised without the customer any more");
     assert.deepEqual(ids(await list(W.mgmt, "&kind=amc")), new Set([W.amcA.id]));
     assert.deepEqual(ids(await list(W.mgmt, `&customerId=${W.B.customer.id}`)), new Set([W.signedB.id]));
     assert.deepEqual(ids(await list(W.mgmt, `&siteId=${W.A.site.id}`)), new Set([W.signedA.id, W.draftA.id, W.amcA.id]));

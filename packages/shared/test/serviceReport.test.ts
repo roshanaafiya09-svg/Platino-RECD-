@@ -73,9 +73,11 @@ test("sign payload: name, PNG data URL, version and an explicit confirmation are
   for (const over of bad) assert.equal(signServiceReportSchema.safeParse({ ...good, ...over }).success, false, JSON.stringify(over).slice(0, 80));
 });
 
-test("'submitted' is a second FINAL state (AMC, no signature): reachable only from draft, leaves nowhere", () => {
+test("'submitted' (older unsigned AMC reports) is final and can no longer be reached: every report must be signed", () => {
   const S = SERVICE_REPORT_STATUS;
-  assert.equal(canTransitionServiceReport(S.DRAFT, S.SUBMITTED), true);
+  assert.equal(canTransitionServiceReport(S.DRAFT, S.SUBMITTED), false, "the unsigned finalisation path is withdrawn");
+  assert.equal(canTransitionServiceReport(S.DRAFT, S.AWAITING_SIGNATURE), true);
+  assert.equal(canTransitionServiceReport(S.AWAITING_SIGNATURE, S.SIGNED), true);
   assert.equal(canTransitionServiceReport(S.AWAITING_SIGNATURE, S.SUBMITTED), false, "a report waiting for the customer cannot be finalised without them");
   for (const to of Object.values(S)) assert.equal(canTransitionServiceReport(S.SUBMITTED, to), false, `submitted -> ${to}`);
   assert.deepEqual([...SERVICE_REPORT_FINAL_STATUSES].sort(), ["signed", "submitted"]);
@@ -83,13 +85,12 @@ test("'submitted' is a second FINAL state (AMC, no signature): reachable only fr
   assert.deepEqual(Object.values(SERVICE_REPORT_KIND).sort(), ["amc", "ticket"]);
 });
 
-test("AMC report: the AMC order and the unit are the only ids the client chooses; acknowledgement defaults to REQUIRED", () => {
+test("AMC report: the AMC order and the unit are the only ids the client chooses; there is no acknowledgement option", () => {
   const ok = createAmcServiceReportSchema.parse({ amcOrderId: "a1", unitId: "u1", visitDate: "2026-10-14", customerId: "cB", siteId: "sB", serialNo: "FAKE", unitSerialNo: "FAKE", status: "signed" });
-  assert.deepEqual(Object.keys(ok).sort(), ["acknowledgementRequired", "amcOrderId", "findings", "resolution", "unitId", "visitDate", "workPerformed"]);
-  assert.equal(ok.acknowledgementRequired, true);
-  assert.equal(createAmcServiceReportSchema.parse({ amcOrderId: "a1", unitId: "u1", visitDate: "2026-10-14", acknowledgementRequired: false }).acknowledgementRequired, false);
-  for (const bad of [{ unitId: "u1" }, { amcOrderId: "a1" }, { amcOrderId: "", unitId: "u1" }, { amcOrderId: "a1", unitId: "u1", acknowledgementRequired: "no" }, { amcOrderId: "a1", unitId: "u1", visitDate: "2999-01-01" }]) {
+  assert.deepEqual(Object.keys(ok).sort(), ["amcOrderId", "findings", "resolution", "unitId", "visitDate", "workPerformed"]);
+  assert.equal("acknowledgementRequired" in createAmcServiceReportSchema.parse({ amcOrderId: "a1", unitId: "u1", visitDate: "2026-10-14", acknowledgementRequired: false }), false, "the flag is not accepted; the API refuses an explicit false");
+  for (const bad of [{ unitId: "u1" }, { amcOrderId: "a1" }, { amcOrderId: "", unitId: "u1" }, { amcOrderId: "a1", unitId: "u1", visitDate: "2999-01-01" }]) {
     assert.equal(createAmcServiceReportSchema.safeParse({ visitDate: "2026-10-14", ...bad }).success, false, JSON.stringify(bad));
   }
-  assert.equal(updateServiceReportSchema.safeParse({ expectedVersion: 1, acknowledgementRequired: false }).success, true);
+  assert.equal("acknowledgementRequired" in (updateServiceReportSchema.parse({ expectedVersion: 1, acknowledgementRequired: false }) as object), false);
 });

@@ -238,6 +238,7 @@ export default function RecdUnitDetailPage() {
                   <th className="px-4 py-3">Visits / year</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Expires</th>
+                  <th className="px-4 py-3">Reports</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -251,6 +252,9 @@ export default function RecdUnitDetailPage() {
                     <td className="px-4 py-3">
                       {formatDate(a.expiresOn)}
                       {a.expiryReminderClearedAt && <div className="text-[10px] font-semibold text-emerald-600">AMC Acquired</div>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link href={`/service-reports?amcOrderId=${a.id}`} data-testid={`unit-amc-reports-link-${a.poNo}`} className="text-xs font-medium hover:underline" style={{ color: "var(--theme-primary)" }}>Service reports</Link>
                     </td>
                   </tr>
                 ))}

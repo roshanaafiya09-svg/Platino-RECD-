@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { NO_MOBILE_LABEL, mobileOrNone } from "@/lib/contactDisplay";
 import { apiErrorMessage } from "@/lib/apiError";
 import { cleanMobile, mobileFieldError } from "@/lib/mobileInput";
 import { useAuth } from "@/components/AuthContext";
+import { canOpenServiceReports } from "@/lib/routeAccess";
 import { canOverrideDuplicatePo } from "@recd/shared";
 
 interface Lookup {
@@ -569,6 +571,11 @@ export default function SiteDetailPage() {
         <p className="text-sm text-gray-500">
           Vendor: <span className="font-medium">{site.vendor?.name ?? "Unassigned"}</span>
         </p>
+        {canOpenServiceReports(hasPermission) && (
+          <Link href={`/service-reports?siteId=${site.id}`} data-testid="site-service-reports-link" className="mt-1 inline-block text-xs font-medium text-[var(--theme-accent)] hover:underline">
+            Service reports for this site
+          </Link>
+        )}
       </div>
 
       {banner && (

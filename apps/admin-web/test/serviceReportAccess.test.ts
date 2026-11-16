@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isCustomerReportPath, SERVICE_REPORT_LIST_PERMISSIONS } from "../src/lib/routeAccess";
-import { EMPTY_REPORT_FILTERS, REPORT_LIST_PAGE_SIZE, pageRange, reportListQuery, reportSource } from "../src/lib/serviceReportList";
+import { EMPTY_REPORT_FILTERS, REPORT_LIST_PAGE_SIZE, cleanReportId, pageRange, reportListQuery, reportSource } from "../src/lib/serviceReportList";
 
 const root = resolve(__dirname, "../../..");
 const read = (p: string) => readFileSync(resolve(root, p), "utf8");
@@ -69,12 +69,23 @@ test("the list screen: customers read /mine (own non-draft reports) with no staf
 test("reportListQuery: only known values reach the address; paging is bounded; free text is trimmed and capped", () => {
   assert.equal(reportListQuery(EMPTY_REPORT_FILTERS), `limit=${REPORT_LIST_PAGE_SIZE}&offset=0`);
   assert.equal(
-    reportListQuery({ status: "signed", kind: "amc", q: "  SN-1  ", offset: 50 }),
+    reportListQuery({ ...EMPTY_REPORT_FILTERS, status: "signed", kind: "amc", q: "  SN-1  ", offset: 50 }),
     `status=signed&kind=amc&q=SN-1&limit=${REPORT_LIST_PAGE_SIZE}&offset=50`,
   );
-  assert.equal(reportListQuery({ status: "approved", kind: "other", q: "", offset: -5 }), `limit=${REPORT_LIST_PAGE_SIZE}&offset=0`, "unknown status / kind and a negative offset are dropped");
+  assert.equal(reportListQuery({ ...EMPTY_REPORT_FILTERS, status: "approved", kind: "other", q: "", offset: -5 }), `limit=${REPORT_LIST_PAGE_SIZE}&offset=0`, "unknown status / kind and a negative offset are dropped");
   assert.ok(reportListQuery({ ...EMPTY_REPORT_FILTERS, q: "x".repeat(500) }).includes(`q=${"x".repeat(100)}&`));
   assert.ok(!reportListQuery({ ...EMPTY_REPORT_FILTERS, q: "a&status=signed" }).includes("&status=signed"), "the search text cannot inject another filter");
+});
+
+test("reportListQuery: customer, site and DG (unit) filters are sent as ids only; anything that is not an id is dropped", () => {
+  assert.equal(
+    reportListQuery({ ...EMPTY_REPORT_FILTERS, customerId: "cust_1", siteId: "site-2", unitId: "unit3" }),
+    `customerId=cust_1&siteId=site-2&unitId=unit3&limit=${REPORT_LIST_PAGE_SIZE}&offset=0`,
+  );
+  assert.equal(reportListQuery({ ...EMPTY_REPORT_FILTERS, customerId: "a&status=signed", siteId: "x y", unitId: "../etc" }), `limit=${REPORT_LIST_PAGE_SIZE}&offset=0`, "no injection through the id filters");
+  assert.equal(cleanReportId(null), "");
+  assert.equal(cleanReportId("clx0abc123"), "clx0abc123");
+  assert.equal(cleanReportId("a".repeat(65)), "");
 });
 
 test("reportSource and pageRange: the labels the list shows", () => {

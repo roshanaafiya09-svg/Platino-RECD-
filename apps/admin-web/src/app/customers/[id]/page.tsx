@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { mobileOrNone } from "@/lib/contactDisplay";
 import { useAuth } from "@/components/AuthContext";
+import { canOpenServiceReports } from "@/lib/routeAccess";
 
 interface CustomerSite {
   id: string;
@@ -76,6 +77,11 @@ export default function CustomerDetailPage() {
           <Link href="/customers" className="text-xs font-medium text-gray-400 hover:text-gray-600">← Customers</Link>
           <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>{customer.name}</h1>
           <p className="text-sm text-gray-500">{sitesCount} site{sitesCount === 1 ? "" : "s"} · {customer.orders.length} order{customer.orders.length === 1 ? "" : "s"}</p>
+          {canOpenServiceReports(hasPermission) && (
+            <Link href={`/service-reports?customerId=${customer.id}`} data-testid="customer-service-reports-link" className="mt-1 inline-block text-xs font-medium text-[var(--theme-accent)] hover:underline">
+              Service reports for this customer
+            </Link>
+          )}
         </div>
         {canManage && (
           <div className="flex gap-2 shrink-0">

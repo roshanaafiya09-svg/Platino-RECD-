@@ -29,6 +29,8 @@ interface U { id: string; name: string; role: string; perms: string[]; customerI
 const users: Record<string, U> = {
   mgmt: { id: "mgmt", name: "Mia Manager", role: ROLE_KEY.MANAGEMENT, perms: [P.MANAGE_AMC_ORDERS, P.MANAGE_COMPLAINTS, P.VIEW_COMPLAINTS_OVERVIEW, P.VIEW_SITE_STATUS] },
   amcOnly: { id: "amcOnly", name: "Amc Admin", role: ROLE_KEY.OWNER_ADMIN, perms: [P.MANAGE_AMC_ORDERS, P.VIEW_SITE_STATUS] },
+  rmService: { id: "rmService", name: "Service Regional Manager", role: ROLE_KEY.REGIONAL_MANAGER, perms: [P.MANAGE_COMPLAINTS, P.VIEW_COMPLAINTS_OVERVIEW, P.VIEW_SITE_STATUS] },
+  engB: { id: "engB", name: "Other Engineer", role: ROLE_KEY.SERVICE_ENGINEER, perms: [P.ACT_ASSIGNED_COMPLAINTS, P.VIEW_SITE_STATUS] },
   engA: { id: "engA", name: "Ravi Engineer", role: ROLE_KEY.SERVICE_ENGINEER, perms: [P.ACT_ASSIGNED_COMPLAINTS, P.VIEW_SITE_STATUS] },
   serviceMgr: { id: "serviceMgr", name: "Service Manager", role: ROLE_KEY.SERVICE_MANAGER, perms: [P.MANAGE_COMPLAINTS, P.VIEW_COMPLAINTS_OVERVIEW, P.VIEW_SITE_STATUS] },
   sales: { id: "sales", name: "Sales", role: ROLE_KEY.SALES, perms: [P.MANAGE_ORDERS, P.VIEW_SITE_STATUS] },
@@ -41,6 +43,8 @@ const users: Record<string, U> = {
 // ---- the AMC world -----------------------------------------------------------------------------------
 const sites: Record<string, any> = {};
 const units: Record<string, any> = {};
+/** Tickets assigned to field engineers: an engineer may handle an AMC report only for a unit on which one is assigned to them. */
+const assignedTickets: Array<{ assignedToId: string; unitId: string }> = [];
 const amcs: Record<string, any> = {};
 function resetWorld() {
   for (const t of [sites, units, amcs]) for (const k of Object.keys(t)) delete t[k];
@@ -185,7 +189,8 @@ function reset() {
       return { id: u.id, name: u.name, isActive: true, customerId: u.customerId ?? null, vendorId: u.vendorId ?? null, role: { key: u.role, permissions: u.perms.map((key) => ({ permission: { key } })) } };
     },
   });
-  stubModel("complaint", { findUnique: () => null });
+  assignedTickets.length = 0;
+  stubModel("complaint", { findUnique: () => null, findFirst: ({ where }: any) => (assignedTickets.some((t) => t.assignedToId === where.assignedToId && t.unitId === where.unitId) ? { id: "assigned-ticket" } : null) });
   stubModel("complaintEvent", { create: ({ data }: any) => data });
   stubModel("serviceReport", serviceReportTable);
   stubModel("serviceReportEvent", { create: ({ data }: any) => { reportEvents.push(data); return data; } });
@@ -196,7 +201,7 @@ function reset() {
     findUnique: ({ where }: any) => {
       const a = Object.values(amcs).find((x: any) => x.id === where.id);
       if (!a) return null;
-      return { ...a, units: a.unitIds.map((unitId: string) => ({ unitId, unit: { id: unitId, serialNo: units[unitId].serialNo, status: units[unitId].status, site: units[unitId].siteId ? { companyName: sites[units[unitId].siteId].companyName, address: sites[units[unitId].siteId].address } : null } })) };
+      return { ...a, units: a.unitIds.map((unitId: string) => ({ unitId, unit: { id: unitId, serialNo: units[unitId].serialNo, status: units[unitId].status, site: units[unitId].siteId ? { companyName: sites[units[unitId].siteId].companyName, address: sites[units[unitId].siteId].address, regionId: sites[units[unitId].siteId].regionId, vendorId: sites[units[unitId].siteId].vendorId } : null } })) };
     },
   });
   stubModel("regionManager", { findMany: () => [{ regionId: "r1" }] });
@@ -242,13 +247,19 @@ async function signed(unitId = "uA1", amcOrderId = AMC1) {
   assert.equal(s.status, 200, JSON.stringify(s.body));
   return s.body;
 }
-/** An AMC report that does not need a customer signature, finalised by staff. */
-async function submittedNoSignature(unitId = "uA1") {
-  const c = await createAmc("mgmt", AMC1, unitId, { acknowledgementRequired: false });
-  assert.equal(c.status, 201, JSON.stringify(c.body));
-  const s = await submit("mgmt", c.body);
-  assert.equal(s.status, 200, JSON.stringify(s.body));
-  return s.body;
+/** An OLDER report that was finalised without a customer signature (that path no longer exists): stored directly, with a PDF that verifies. */
+function legacySubmittedNoSignature(unitId = "uA1") {
+  const bytes = Buffer.from("%PDF-1.4 older unsigned report");
+  const ref = `f${++fileSeq}`;
+  files.set(ref, { bytes, contentType: "application/pdf" });
+  const row = {
+    id: `sr${++seq}`, kind: "amc", complaintId: null, amcOrderId: AMC1, acknowledgementRequired: false, unitSerialNo: units[unitId].serialNo, customerId: "cA", siteId: units[unitId].siteId, unitId,
+    createdById: "mgmt", visitDate: new Date("2026-10-14T00:00:00Z"), workPerformed: "serviced", findings: "ok", resolution: "done", partsUsed: null, remarks: null,
+    reportNumber: `AMC-ABCDEF-R${seq}`, status: "submitted", version: 1, contentHash: "a".repeat(64), submittedAt: new Date(), submittedById: "mgmt", signedAt: null, signedVersion: null,
+    signerName: null, signedById: null, signatureFileId: null, pdfFileId: ref, pdfSha256: sha256Hex(bytes), createdAt: new Date(Date.now() + seq),
+  };
+  rows.push(row);
+  return row;
 }
 const rowOf = (id: string) => rows.find((r) => r.id === id);
 const pdfText = async (buf: Buffer) => {
@@ -314,7 +325,8 @@ test("AMC draft: validation - unit and AMC required, real visit date, only one o
   assert.equal((await call("mgmt", "POST", "/service-reports", { amcOrderId: AMC1, ...fields() })).status, 400, "no unit");
   assert.equal((await createAmc("mgmt", AMC1, "uA1", { visitDate: "2999-01-01" })).status, 400, "future date");
   assert.equal((await createAmc("mgmt", AMC1, "uA1", { visitDate: "14/10/2026" })).status, 400);
-  assert.equal((await createAmc("mgmt", AMC1, "uA1", { acknowledgementRequired: "yes" })).status, 400);
+  const unsigned = await createAmc("mgmt", AMC1, "uA1", { acknowledgementRequired: false });
+  assert.deepEqual([unsigned.status, unsigned.body.code], [400, "SIGNATURE_REQUIRED"], "an unsigned report cannot be requested");
   const both = await call("mgmt", "POST", "/service-reports", { amcOrderId: AMC1, unitId: "uA1", complaintId: "t1", ...fields() });
   assert.equal(both.status, 400);
   assert.match(both.body.error, /not both/);
@@ -322,18 +334,31 @@ test("AMC draft: validation - unit and AMC required, real visit date, only one o
   assert.equal((await call("mgmt", "POST", "/service-reports", { amcOrderId: AMC1, unitId: "uA1", visitDate: "2026-10-14" })).status, 201, "only the visit date is needed for a draft");
 });
 
-test("AMC draft: who may create - the existing AMC boundary only (MANAGE_AMC_ORDERS), narrowed by vendor and region", async () => {
-  for (const who of ["mgmt", "amcOnly"]) { reset(); assert.equal((await createAmc(who)).status, 201, who); }
+test("AMC draft: who may create - AMC managers, service staff who manage tickets, and engineers only on a unit they are assigned; vendor and region limits stay", async () => {
+  for (const who of ["mgmt", "amcOnly", "serviceMgr"]) { reset(); assert.equal((await createAmc(who)).status, 201, who); }
   reset();
   assert.equal((await createAmc("vendorUser", AMC1, "uA1")).status, 201, "vendor user, unit at their vendor's site");
   reset();
   assert.equal((await createAmc("rm", AMC1, "uA1")).status, 201, "regional manager, unit in their region");
-  for (const [who, unit] of [["vendorUser", "uA2"], ["rm", "uA2"]] as const) {
+  reset();
+  assert.equal((await createAmc("rmService", AMC1, "uA1")).status, 201, "regional manager holding only the service permission, unit in their region");
+  for (const [who, unit] of [["vendorUser", "uA2"], ["rm", "uA2"], ["rmService", "uA2"]] as const) {
     reset();
     assert.equal((await createAmc(who, AMC1, unit)).status, 403, `${who} on ${unit} (another vendor / region)`);
     assert.equal(rows.length, 0);
   }
-  for (const who of ["engA", "serviceMgr", "sales", "custA", "custB"]) {
+  // A field engineer: only where a ticket on THAT unit is assigned to them.
+  reset();
+  assert.equal((await createAmc("engA")).status, 403, "engineer with no assigned ticket on the unit");
+  assignedTickets.push({ assignedToId: "engA", unitId: "uA2" });
+  assert.equal((await createAmc("engA", AMC1, "uA1")).status, 403, "assigned on a different unit");
+  assert.equal(rows.length, 0);
+  assignedTickets.push({ assignedToId: "engA", unitId: "uA1" });
+  const mine = await createAmc("engA", AMC1, "uA1");
+  assert.equal(mine.status, 201, JSON.stringify(mine.body));
+  assert.equal(mine.body.customerId, "cA");
+  assert.equal((await createAmc("engB", AMC1, "uA1")).status, 403, "another engineer, ticket not assigned to them");
+  for (const who of ["sales", "custA", "custB"]) {
     reset();
     const r = await createAmc(who);
     assert.equal(r.status, 403, who);
@@ -375,14 +400,17 @@ test("AMC visits: the contracted frequency is a schedule, not a limit - no error
 // Draft editing, the acknowledgement rule, submission
 // =============================================================================================
 
-test("AMC edit: the acknowledgement rule can be changed while a draft; stale edits are refused; ticket reports cannot take the flag", async () => {
+test("AMC edit: a draft can be edited; stale edits are refused; the acknowledgement option no longer exists (ticket or AMC)", async () => {
   reset();
   const d = await createAmc();
-  const ok = await call("mgmt", "PATCH", `/service-reports/${d.body.id}`, { expectedVersion: 1, acknowledgementRequired: false, findings: "Updated findings" });
+  const ok = await call("mgmt", "PATCH", `/service-reports/${d.body.id}`, { expectedVersion: 1, findings: "Updated findings" });
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
-  assert.deepEqual([ok.body.version, ok.body.acknowledgementRequired, ok.body.findings], [2, false, "Updated findings"]);
+  assert.deepEqual([ok.body.version, ok.body.acknowledgementRequired, ok.body.findings], [2, true, "Updated findings"]);
   assert.equal((await call("mgmt", "PATCH", `/service-reports/${d.body.id}`, { expectedVersion: 1, findings: "Overwrite" })).body.code, "STALE_VERSION");
   assert.equal(rowOf(d.body.id).findings, "Updated findings");
+  const off = await call("mgmt", "PATCH", `/service-reports/${d.body.id}`, { expectedVersion: 2, acknowledgementRequired: false });
+  assert.deepEqual([off.status, off.body.code], [400, "SIGNATURE_REQUIRED"]);
+  assert.equal(rowOf(d.body.id).acknowledgementRequired, true);
   assert.deepEqual(reportEvents.map((e) => e.type), ["service_report_created", "service_report_updated"]);
 
   rows.push({ id: "tk", kind: "ticket", complaintId: "t1", amcOrderId: null, acknowledgementRequired: true, status: "draft", version: 1, customerId: "cA", siteId: null, unitId: null, createdById: "mgmt", visitDate: new Date("2026-10-14"), workPerformed: "", findings: "", resolution: "", createdAt: new Date() });
@@ -402,7 +430,11 @@ test("AMC edit and submit: only AMC managers; customers see no draft; incomplete
   assert.deepEqual(refused.body.missing, ["Findings", "Resolution"]);
   assert.equal(rowOf(d.body.id).status, "draft");
   assert.equal((await submit("custA", d.body)).status, 404);
-  assert.equal((await submit("serviceMgr", d.body)).status, 403, "ticket managers have no AMC access");
+  assert.equal((await submit("engA", d.body)).status, 403, "an engineer with no ticket assigned on the unit has no access");
+  assert.equal((await submit("sales", d.body)).status, 403);
+  const byService = await submit("serviceMgr", d.body);
+  assert.equal(byService.status, 400, "a service manager has access; the draft is simply incomplete");
+  assert.deepEqual(byService.body.missing, ["Findings", "Resolution"]);
 });
 
 test("acknowledgement REQUIRED: submit waits for the customer; reopening bumps the version; the audit trail follows", async () => {
@@ -498,57 +530,51 @@ test("AMC sign: a reopened (edited) report cannot be signed on the old view; a t
 });
 
 // =============================================================================================
-// Acknowledgement NOT required
+// Every report needs the customer's signature (the unsigned path is withdrawn)
 // =============================================================================================
 
-test("acknowledgement NOT required: staff finalise it - status 'submitted' (never 'signed'), a PDF exists and says it is not signed", async () => {
+test("signature required: every submit sends the report to the customer - no PDF is produced and nothing is final until they sign", async () => {
   reset();
-  const r = await submittedNoSignature();
-  assert.deepEqual([r.status, r.acknowledgementRequired, r.pdfAvailable, r.signerName, r.signedAt], ["submitted", false, true, null, null]);
-  const row = rowOf(r.id);
-  assert.ok(row.pdfFileId && row.pdfSha256 && row.contentHash && row.submittedAt);
-  assert.equal(row.signatureFileId, null);
-  assert.equal(files.size, 1, "just the PDF - there is no signature file");
-  const text = await pdfText(files.get(row.pdfFileId)!.bytes);
-  for (const e of ["AMC Service Report", "SUBMITTED - FINAL, NOT SIGNED", "Not required for this report", "SN-A1", "AMC-ABCDEF"]) assert.ok(text.includes(e), e);
-  assert.ok(!text.includes("SIGNED - FINAL") && !text.includes("Signed by"));
-  const last = reportEvents[reportEvents.length - 1];
-  assert.deepEqual([last.type, last.toValue, last.detail.signed, last.detail.finalPdfGenerated], ["service_report_submitted", "submitted", false, true]);
+  const c = await createAmc("mgmt", AMC1, "uA1");
+  assert.equal(c.body.acknowledgementRequired, true);
+  const sub = await submit("mgmt", c.body);
+  assert.equal(sub.body.status, "awaiting_signature");
+  assert.equal(files.size, 0, "no PDF and no signature file before the customer signs");
+  assert.equal(rowOf(c.body.id).signedAt, null);
+  assert.equal((await call("mgmt", "POST", `/service-reports/${c.body.id}/sign`, { signerName: "Staff Member", signatureImage: goodSignature(), version: sub.body.version, confirm: true })).status, 403, "staff cannot sign for the customer");
+  assert.equal(rowOf(c.body.id).status, "awaiting_signature");
+  assert.equal((await submit("mgmt", sub.body)).status, 409, "an awaiting report cannot be submitted again");
 });
 
-test("acknowledgement NOT required: it cannot be signed, edited or reopened afterwards; the signature file does not exist", async () => {
+test("signature required: a draft stored under the old option (acknowledgement off) is brought in line on submit and then needs the customer's signature", async () => {
   reset();
-  const r = await submittedNoSignature();
-  const s = await sign("custA", r);
-  assert.deepEqual([s.status, s.body.code], [409, "BAD_TRANSITION"]);
-  assert.equal((await call("mgmt", "PATCH", `/service-reports/${r.id}`, { expectedVersion: r.version, findings: "Rewrite" })).status, 409);
-  assert.equal((await call("mgmt", "POST", `/service-reports/${r.id}/reopen`, { expectedVersion: r.version })).status, 409);
-  assert.equal((await submit("mgmt", r)).status, 409);
-  assert.equal((await call("custA", "GET", `/service-reports/${r.id}/signature`)).status, 409);
-  assert.equal(rowOf(r.id).status, "submitted");
-  assert.equal(reportEvents.filter((e) => e.type === "service_report_signed").length, 0);
-});
-
-test("acknowledgement NOT required: the customer can still read and download it; other customers cannot; the next visit works", async () => {
-  reset();
-  const r = await submittedNoSignature();
-  const d = await call("custA", "GET", `/service-reports/${r.id}/pdf`);
-  assert.equal(d.status, 200);
-  assert.equal(d.headers.get("content-type"), "application/pdf");
-  assert.equal(d.headers.get("content-disposition"), 'attachment; filename="service-report-AMC-ABCDEF-R1.pdf"');
-  assert.equal(sha256Hex(d.buf), rowOf(r.id).pdfSha256);
-  assert.equal((await call("custB", "GET", `/service-reports/${r.id}/pdf`)).status, 404);
-  assert.equal((await createAmc()).status, 201, "a submitted report does not block the next visit");
-});
-
-test("acknowledgement REQUIRED and NOT required differ only by the stored rule: a required report can never be finalised without the customer", async () => {
-  reset();
-  const need = await createAmc("mgmt", AMC1, "uA1", { acknowledgementRequired: true });
-  const sub = await submit("mgmt", need.body);
-  assert.equal(sub.body.status, "awaiting_signature", "required -> awaits the customer");
+  const c = await createAmc("mgmt", AMC1, "uA1");
+  rowOf(c.body.id).acknowledgementRequired = false; // as an older draft may have been stored
+  const sub = await submit("mgmt", { id: c.body.id, version: c.body.version });
+  assert.deepEqual([sub.status, sub.body.status, sub.body.acknowledgementRequired], [200, "awaiting_signature", true]);
   assert.equal(files.size, 0);
-  const noNeed = await createAmc("mgmt", AMC1, "uA2", { acknowledgementRequired: false });
-  assert.equal((await submit("mgmt", noNeed.body)).body.status, "submitted");
+  const signedBody = await sign("custA", sub.body);
+  assert.equal(signedBody.status, 200, JSON.stringify(signedBody.body));
+  assert.equal(signedBody.body.status, "signed");
+  assert.equal(files.size, 2, "signature image and signed PDF");
+});
+
+test("older unsigned reports: a report finalised without a signature before this change stays viewable and downloadable, and stays final", async () => {
+  reset();
+  const r = legacySubmittedNoSignature();
+  for (const who of ["mgmt", "custA"]) {
+    const d = await call(who, "GET", `/service-reports/${r.id}/pdf`);
+    assert.equal(d.status, 200, who);
+    assert.equal(d.headers.get("content-type"), "application/pdf");
+    assert.equal(sha256Hex(d.buf), r.pdfSha256);
+  }
+  assert.equal((await call("custB", "GET", `/service-reports/${r.id}/pdf`)).status, 404);
+  const s = await sign("custA", { id: r.id, version: r.version });
+  assert.deepEqual([s.status, s.body.code], [409, "BAD_TRANSITION"], "it can still not be signed afterwards");
+  assert.equal((await call("mgmt", "PATCH", `/service-reports/${r.id}`, { expectedVersion: 1, findings: "Rewrite" })).status, 409);
+  assert.equal((await call("mgmt", "POST", `/service-reports/${r.id}/reopen`, { expectedVersion: 1 })).status, 409);
+  assert.equal((await submit("mgmt", { id: r.id, version: 1 })).status, 409);
+  assert.equal((await createAmc()).status, 201, "a finished older report does not block the next visit");
 });
 
 // =============================================================================================
@@ -562,7 +588,12 @@ test("download: staff with AMC access and the owning customer get the PDF; every
   assert.equal((await call("custB", "GET", `/service-reports/${s.id}/pdf`)).status, 404);
   assert.equal((await call("custB", "GET", `/service-reports/${s.id}`)).status, 404);
   assert.equal((await call("custB", "GET", `/service-reports/${s.id}/signature`)).status, 404);
-  for (const who of ["engA", "serviceMgr", "sales"]) assert.equal((await call(who, "GET", `/service-reports/${s.id}/pdf`)).status, 403, who);
+  for (const who of ["engA", "engB", "sales"]) assert.equal((await call(who, "GET", `/service-reports/${s.id}/pdf`)).status, 403, `${who} (no AMC right on this unit)`);
+  for (const who of ["serviceMgr", "rmService"]) assert.equal((await call(who, "GET", `/service-reports/${s.id}/pdf`)).status, 200, `${who}: service staff with access to the order`);
+  assignedTickets.push({ assignedToId: "engA", unitId: "uA1" });
+  assert.equal((await call("engA", "GET", `/service-reports/${s.id}/pdf`)).status, 200, "an engineer with a ticket assigned on that unit");
+  assert.equal((await call("engB", "GET", `/service-reports/${s.id}/pdf`)).status, 403, "another engineer");
+  assignedTickets.length = 0;
   assert.equal((await call("vendorUser", "GET", `/service-reports/${s.id}/pdf`)).status, 200, "vendor user, their vendor's site");
   const farUnit = await signed("uA2");
   assert.equal((await call("vendorUser", "GET", `/service-reports/${farUnit.id}/pdf`)).status, 403, "vendor user, another vendor's site");
@@ -610,7 +641,16 @@ test("list by AMC order: context (AMC, units with serials), status of every repo
   assert.equal(customer.body.canWrite, false);
   assert.deepEqual(customer.body.reports.map((x: any) => x.id), [signedOne.id], "no draft for the customer");
   assert.equal((await call("custB", "GET", `/service-reports?amcOrderId=${AMC1}`)).status, 404);
-  for (const who of ["engA", "serviceMgr", "sales", "vendorUser", "rm"]) assert.equal((await call(who, "GET", `/service-reports?amcOrderId=${AMC1}`)).status, 403, who);
+  for (const who of ["engA", "sales", "vendorUser", "rm"]) assert.equal((await call(who, "GET", `/service-reports?amcOrderId=${AMC1}`)).status, 403, who);
+  const svc = await call("serviceMgr", "GET", `/service-reports?amcOrderId=${AMC1}`);
+  assert.deepEqual([svc.status, svc.body.canWrite, svc.body.reports.length], [200, true, 2], "a service manager sees the order's reports and may write");
+  // A regional service user and an engineer see only the units they may handle.
+  const rmSvc = await call("rmService", "GET", `/service-reports?amcOrderId=${AMC1}`);
+  assert.deepEqual([rmSvc.status, rmSvc.body.reports.map((x: any) => x.unitId)], [200, ["uA1"]], "only the report in their region (uA2 is in another region)");
+  assert.ok(!rmSvc.body.context.units.some((u: any) => u.id === "uA2"), "a unit in another region is not offered");
+  assignedTickets.push({ assignedToId: "engA", unitId: "uA2" });
+  const eng = await call("engA", "GET", `/service-reports?amcOrderId=${AMC1}`);
+  assert.deepEqual([eng.status, eng.body.canWrite, eng.body.reports.map((x: any) => x.unitId), eng.body.context.units.map((u: any) => u.id)], [200, true, ["uA2"], ["uA2"]], "only the unit with their assigned ticket");
   assert.equal((await call("mgmt", "GET", `/service-reports?amcOrderId=${AMC1}&complaintId=t1`)).status, 400);
   assert.equal((await call("mgmt", "GET", "/service-reports?amcOrderId=nope")).status, 404);
 });
@@ -619,8 +659,6 @@ test("customer entry point: /mine lists only the customer's own reports that hav
   reset();
   const a1 = await awaiting("uA1", AMC1);
   await createAmc("mgmt", AMC1, "uA2"); // a draft
-  const noSig = await createAmc("mgmt", AMC1, "uA1", { acknowledgementRequired: false }).then((c) => (c.status === 201 ? submit("mgmt", c.body) : c));
-  void noSig; // uA1 already has a report awaiting signature, so this one is refused - /mine must still show only finished-draft reports
   await awaiting("uB1", AMC2);
   const mine = await call("custA", "GET", "/service-reports/mine");
   assert.equal(mine.status, 200);
@@ -635,26 +673,19 @@ test("customer entry point: /mine lists only the customer's own reports that hav
 // Failures and concurrency
 // =============================================================================================
 
-test("failed PDF generation: signing and no-signature submission both answer 500, store nothing, and can be retried", async () => {
+test("failed PDF generation: signing answers 500, stores nothing, leaves the report awaiting signature, and can be retried", async () => {
   reset();
   const r = await awaiting();
-  const c = await createAmc("mgmt", AMC1, "uA2", { acknowledgementRequired: false });
   const spy = mock.method(PDFDocument.prototype, "image", () => { throw new Error("boom"); });
   const failedSign = await sign("custA", r);
   spy.mock.restore();
   assert.deepEqual([failedSign.status, failedSign.body.code], [500, "PDF_GENERATION_FAILED"]);
   assert.equal(rowOf(r.id).status, "awaiting_signature");
-  const spy2 = mock.method(PDFDocument.prototype, "end", () => { throw new Error("boom"); });
-  const failedSubmit = await submit("mgmt", c.body);
-  spy2.mock.restore();
-  assert.deepEqual([failedSubmit.status, failedSubmit.body.code], [500, "PDF_GENERATION_FAILED"]);
-  assert.equal(rowOf(c.body.id).status, "draft");
   assert.equal(files.size, 0);
   assert.equal((await sign("custA", r)).status, 200);
-  assert.equal((await submit("mgmt", c.body)).status, 200);
 });
 
-test("failed storage: no half-final report and no orphan file - on signing (either write) and on no-signature submission", async () => {
+test("failed storage: no half-signed report and no orphan file - on either write; storage not configured is a 503", async () => {
   for (const failAt of [1, 2]) {
     reset();
     const r = await awaiting();
@@ -665,18 +696,10 @@ test("failed storage: no half-final report and no orphan file - on signing (eith
     assert.equal(files.size, 0);
   }
   reset();
-  const c = await createAmc("mgmt", AMC1, "uA1", { acknowledgementRequired: false });
-  storageFlags.failPutNumber = 1;
-  const res = await submit("mgmt", c.body);
-  assert.deepEqual([res.status, res.body.code], [502, "STORAGE_FAILED"]);
-  assert.deepEqual([rowOf(c.body.id).status, rowOf(c.body.id).pdfFileId], ["draft", null]);
-  storageFlags.puts = 0;
-  storageFlags.failPutNumber = 0;
-  assert.equal((await submit("mgmt", c.body)).status, 200, "retry works");
-  reset();
+  const r2 = await awaiting();
   setReportStorageForTests(null);
-  const c2 = await createAmc("mgmt", AMC1, "uA1", { acknowledgementRequired: false });
-  assert.equal((await submit("mgmt", c2.body)).body.code, "STORAGE_NOT_CONFIGURED");
+  assert.equal((await sign("custA", r2)).body.code, "STORAGE_NOT_CONFIGURED");
+  assert.equal(rowOf(r2.id).status, "awaiting_signature");
 });
 
 test("failed database update at the last step: the stored files are removed again and the error is not hidden", async () => {
@@ -684,11 +707,6 @@ test("failed database update at the last step: the stored files are removed agai
   const r = await awaiting();
   dbFlags.failUpdateMany = true;
   assert.equal((await sign("custA", r)).status, 500);
-  assert.equal(files.size, 0);
-  dbFlags.failUpdateMany = false;
-  const c = await createAmc("mgmt", AMC1, "uA2", { acknowledgementRequired: false });
-  dbFlags.failUpdateMany = true;
-  assert.equal((await submit("mgmt", c.body)).status, 500);
   assert.equal(files.size, 0);
 });
 
@@ -702,13 +720,14 @@ test("simultaneous signing: exactly one signature wins and no surplus files rema
   assert.equal(reportEvents.filter((e) => e.type === "service_report_signed").length, 1);
 });
 
-test("simultaneous no-signature submission: exactly one wins, one PDF remains", async () => {
+test("simultaneous submission: exactly one wins and nothing is stored (the customer has not signed yet)", async () => {
   reset();
-  const c = await createAmc("mgmt", AMC1, "uA1", { acknowledgementRequired: false });
+  const c = await createAmc("mgmt", AMC1, "uA1");
   const results = await Promise.all(Array.from({ length: 4 }, () => submit("mgmt", c.body)));
   assert.equal(results.filter((x) => x.status === 200).length, 1, results.map((x) => x.status).join());
   assert.ok(results.filter((x) => x.status !== 200).every((x) => x.status === 409));
-  assert.equal(files.size, 1);
+  assert.equal(files.size, 0);
+  assert.equal(rowOf(c.body.id).status, "awaiting_signature");
 });
 
 test("simultaneous creation for one AMC unit: one draft wins, the others get a clear 409", async () => {

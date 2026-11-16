@@ -102,27 +102,27 @@ test("AMC order list: every order links to its service reports", () => {
   assert.match(amcOrders, /Service reports/);
 });
 
-test("AMC list screen: shows the AMC, offers only units the AMC covers, states the acknowledgement rule, and explains frequency vs reports", () => {
+test("AMC list screen: shows the AMC, offers only units the AMC covers, has NO acknowledgement option, and explains frequency vs reports", () => {
   assert.match(list, /amcOrderId/);
   assert.match(list, /data-testid="amc-context"/);
   assert.match(list, /data-testid="amc-unit-select"/);
   assert.match(list, /u\.status === "active" && u\.serialNo/, "only active units with a serial are offered");
-  assert.match(list, /data-testid="ack-required"/);
-  assert.match(list, /acknowledgementRequired/);
+  assert.doesNotMatch(list, /data-testid="ack-required"/, "the 'customer need not sign' checkbox is gone");
+  assert.doesNotMatch(list.split(/\r?\n/).filter((l) => !l.includes("acknowledgementRequired: boolean")).join("\n"), /acknowledgementRequired/, "no screen code sends or edits the flag");
+  assert.match(list, /signed by the customer/);
   assert.match(list, /schedule/i);
   assert.match(list, /Contracted visits per year/);
-  assert.match(list, /\{ amcOrderId, unitId, acknowledgementRequired, \.\.\.form \}/, "the client sends only the AMC and the unit - never customer, site or serial");
+  assert.match(list, /\{ amcOrderId, unitId, \.\.\.form \}/, "the client sends only the AMC and the unit - never customer, site or serial");
   const bodyLine = list.split(/\r?\n/).find((l) => l.includes("const body = amcOrderId")) ?? "";
   assert.doesNotMatch(bodyLine, /customerId|siteId|serial/i);
 });
 
-test("AMC detail screen: AMC order, type, serial are shown; the acknowledgement rule is explicit; no-signature submission is labelled", () => {
+test("AMC detail screen: AMC order, type, serial are shown; there is no way to finalise without the customer; older unsigned reports are labelled", () => {
   assert.match(detail, /AMC order/);
   assert.match(detail, /RECD serial number/);
-  assert.match(detail, /data-testid="ack-required-toggle"/);
-  assert.match(detail, /Finalise without customer signature/);
-  assert.match(detail, /data-testid="ack-rule"/);
-  assert.match(detail, /Submitted and final - not signed/);
+  assert.doesNotMatch(detail, /ack-required-toggle|Finalise without customer signature|ackRequired/, "the unsigned option is gone");
+  assert.match(detail, /Submit for customer signature/);
+  assert.match(detail, /Submitted and final - not signed \(older report\)/);
   assert.match(detail, /data-testid="submitted-section"/);
 });
 
@@ -156,4 +156,22 @@ test("page guard: a customer is NOT bounced off the report pages (found in the b
   const access = read("apps/admin-web/src/lib/routeAccess.ts");
   assert.match(access, /export function isCustomerReportPath/);
   assert.ok(guard.includes("service-reports"), "the guard names the report route");
+});
+
+test("customer, site and DG entry points: Customer and Site pages link to their reports, the unit page links each AMC order, and the list filters by them", () => {
+  const customerPage = read("apps/admin-web/src/app/customers/[id]/page.tsx");
+  const sitePage = read("apps/admin-web/src/app/sites/[id]/page.tsx");
+  assert.match(customerPage, /\/service-reports\?customerId=\$\{customer\.id\}/);
+  assert.match(customerPage, /canOpenServiceReports\(hasPermission\)/, "offered only to staff who may open the list; the API still scopes the rows");
+  assert.match(sitePage, /\/service-reports\?siteId=\$\{site\.id\}/);
+  assert.match(sitePage, /canOpenServiceReports\(hasPermission\)/);
+  assert.match(unitPage, /\/service-reports\?amcOrderId=\$\{a\.id\}/, "a way into the AMC order's reports for service staff who cannot open the AMC Order list");
+  assert.match(unitPage, /unit-report-|unit-amc-report-/, "the existing report sections on the unit page are kept");
+  const all = read("apps/admin-web/src/app/service-reports/AllServiceReports.tsx");
+  assert.match(all, /params\.get\("customerId"\)/);
+  assert.match(all, /params\.get\("siteId"\)/);
+  assert.match(all, /params\.get\("unitId"\)/);
+  assert.match(all, /data-testid="report-scope-filters"/);
+  assert.match(all, /Start a new report|start it there/, "the page still explains that a report starts from the ticket or the AMC order");
+  assert.doesNotMatch(all, /new-report-form/, "no second create form that bypasses the source record");
 });

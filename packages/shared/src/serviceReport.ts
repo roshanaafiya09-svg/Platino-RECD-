@@ -34,8 +34,8 @@ export const SERVICE_REPORT_OPEN_STATUSES: ServiceReportStatus[] = ["draft", "aw
 
 /** A signed report is final: nothing leaves it. */
 export const SERVICE_REPORT_TRANSITIONS: Record<ServiceReportStatus, ServiceReportStatus[]> = {
-  // draft -> submitted is only allowed when the report does not require customer acknowledgement (checked by the API).
-  draft: ["awaiting_signature", "submitted"],
+  // draft -> submitted (the old "acknowledgement not required" path) is withdrawn: every report goes to the customer for signature.
+  draft: ["awaiting_signature"],
   awaiting_signature: ["draft", "signed"],
   signed: [],
   submitted: [],
@@ -95,14 +95,11 @@ export const createServiceReportSchema = serviceReportFieldsSchema.extend({
  * chosen by the client; the customer and the site are derived and checked by the API, and the serial number is
  * copied from the unit at creation time.
  *
- * `acknowledgementRequired` is the explicit, stored rule for this report: true (default) = the customer must review
- * and sign; false = staff may finalise it without a customer signature. Which AMC reports need acknowledgement is an
- * open business decision - the safe default is "required".
+ * Every report needs the customer's signature: there is no "acknowledgement not required" option any more (the API refuses `acknowledgementRequired: false`).
  */
 export const createAmcServiceReportSchema = serviceReportFieldsSchema.extend({
   amcOrderId: z.string().min(1),
   unitId: z.string().min(1),
-  acknowledgementRequired: z.boolean().default(true),
 });
 
 // NOTE: spelled out (not serviceReportFieldsSchema.partial()) on purpose. In zod 4, .partial() applies a field's .default("") when the key is
@@ -114,8 +111,6 @@ export const updateServiceReportSchema = z.object({
   resolution: trimmedText.optional(),
   partsUsed: trimmedText.optional(),
   remarks: trimmedText.optional(),
-  /** AMC reports only (refused for ticket reports): change the acknowledgement rule while still a draft. */
-  acknowledgementRequired: z.boolean().optional(),
   /** The version the editor loaded; a stale edit is refused instead of overwriting newer work. */
   expectedVersion: z.number().int().positive(),
 });

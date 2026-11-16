@@ -33,17 +33,18 @@ import { getReportStorage, sha256Hex, type ReportStorage } from "../lib/reportSt
  *   - "ticket" (Requirement 4): a visit on a service ticket.
  *   - "amc"    (Requirement 5): a visit under an AMC order, for ONE RECD unit that the order covers.
  *
- * States: draft -> awaiting_signature -> signed (final). An AMC report whose acknowledgement is marked NOT required
- * (an explicit, stored per-report rule) goes draft -> submitted (final, clearly "not signed"). Final reports are
- * immutable (API and database trigger).
+ * States: draft -> awaiting_signature -> signed (final). EVERY report needs the customer's signature: the older "acknowledgement
+ * not required" AMC path (draft -> submitted, unsigned) can no longer be started. A "submitted" report that already exists keeps
+ * being viewable and downloadable, exactly as stored. Final reports are immutable (API and database trigger).
  *
  * WHO MAY DO WHAT (all enforced here, never by the screens):
  *  TICKET reports - write: MANAGE_COMPLAINTS, or ACT_ASSIGNED_COMPLAINTS on a ticket assigned to that user (vendor users
  *    only for their vendor's sites, Regional Managers only for their regions). Read: those staff plus
  *    VIEW_COMPLAINTS_OVERVIEW holders.
- *  AMC reports - the existing AMC boundary: write AND read need MANAGE_AMC_ORDERS (management-level roles today; field
- *    engineers, service staff, sales and vendors cannot even list AMC orders, so they get no AMC reports - widening that
- *    needs mentor approval). Vendor-scoped users and Regional Managers are additionally limited to their sites/regions.
+ *  AMC reports - write AND read for: MANAGE_AMC_ORDERS (management), MANAGE_COMPLAINTS (service team, service managers,
+ *    regional managers) and - only for a unit on which a ticket is ASSIGNED to them - ACT_ASSIGNED_COMPLAINTS (field engineers).
+ *    Vendor-scoped users and Regional Managers are additionally limited to their sites/regions. Sales, finance and everyone
+ *    holding none of those permissions get nothing.
  *  Customers (both kinds) - read reports of their OWN customer once they have left draft; sign only reports awaiting
  *    signature. The signer is the logged-in customer contact; the typed name and drawn image are recorded evidence.
  *  customerId / siteId / unitId / serial are never read from a request body: tickets give them for ticket reports; the AMC
@@ -89,19 +90,28 @@ async function staffAccess(req: AuthenticatedRequest, ticket: TicketScope): Prom
 }
 
 /**
- * What staff may do with AMC reports: the AMC boundary (MANAGE_AMC_ORDERS), narrowed by the unit's site for vendor and
- * regional users. `site` is null when no particular site is in play (a list for a whole AMC order): scoped users then
- * get nothing, which is the conservative reading.
+ * What staff may do with AMC reports. Who: MANAGE_AMC_ORDERS or MANAGE_COMPLAINTS holders; a field engineer (ACT_ASSIGNED_COMPLAINTS only)
+ * just for a unit on which a ticket is assigned to them (`unitId`). Narrowed by the unit's site for vendor and regional users. `site` is null
+ * when no particular site is in play (a list for a whole AMC order, `scoped` = false): scoped users then get nothing, which is the
+ * conservative reading.
  */
-async function amcStaffAccess(req: AuthenticatedRequest, site: { regionId: string | null; vendorId: string | null } | null | undefined, scoped = true): Promise<Access> {
+async function amcStaffAccess(req: AuthenticatedRequest, site: { regionId: string | null; vendorId: string | null } | null | undefined, scoped = true, unitId?: string | null): Promise<Access> {
   const a = req.auth!;
-  if (a.customerId || !a.permissions.has(PERMISSION_KEY.MANAGE_AMC_ORDERS)) return NONE;
+  if (a.customerId) return NONE;
+  const amc = a.permissions.has(PERMISSION_KEY.MANAGE_AMC_ORDERS);
+  const manage = a.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS);
+  const act = a.permissions.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS);
+  if (!amc && !manage && !act) return NONE;
   if (a.vendorId && (!scoped || site?.vendorId !== a.vendorId)) return NONE;
   if (a.roleKey === ROLE_KEY.REGIONAL_MANAGER) {
     const regions = await managedRegionIds(a.userId, a.roleKey);
     if (!scoped || !site?.regionId || !regions.includes(site.regionId)) return NONE;
   }
-  return { read: true, write: true };
+  if (amc || manage) return { read: true, write: true };
+  // A field engineer: only for a unit they have a ticket assigned on.
+  if (!unitId) return NONE;
+  const assigned = await prisma.complaint.findFirst({ where: { assignedToId: a.userId, unitId }, select: { id: true } });
+  return assigned ? { read: true, write: true } : NONE;
 }
 
 const isOwnCustomer = (req: AuthenticatedRequest, customerId: string) => !!req.auth!.customerId && req.auth!.customerId === customerId;
@@ -128,7 +138,7 @@ const reportInclude = {
 type ReportRow = Prisma.ServiceReportGetPayload<{ include: typeof reportInclude }>;
 
 async function accessTo(req: AuthenticatedRequest, report: ReportRow): Promise<Access> {
-  if (report.kind === SERVICE_REPORT_KIND.AMC) return amcStaffAccess(req, report.site);
+  if (report.kind === SERVICE_REPORT_KIND.AMC) return amcStaffAccess(req, report.site, true, report.unitId);
   return report.complaint ? staffAccess(req, report.complaint) : NONE;
 }
 
@@ -228,7 +238,8 @@ const staleVersion = (res: Response) =>
  *  - ticket reports: MANAGE_COMPLAINTS or VIEW_COMPLAINTS_OVERVIEW see every ticket's reports; ACT_ASSIGNED_COMPLAINTS only those of tickets
  *    assigned to them; a vendor user only their vendor's sites; a Regional Manager only their mapped regions (a ticket without a site is out of
  *    every region and out of every vendor).
- *  - AMC reports: MANAGE_AMC_ORDERS, narrowed by the report's site for vendor and regional users in the same way.
+ *  - AMC reports: MANAGE_AMC_ORDERS or MANAGE_COMPLAINTS, narrowed by the report's site for vendor and regional users in the same way; a field
+ *    engineer only those of units on which a ticket is assigned to them.
  * Returns null when the user may list nothing. Customers never get here (they use /mine or a ticket / AMC order they own).
  */
 async function staffListScope(req: AuthenticatedRequest): Promise<Prisma.ServiceReportWhereInput | null> {
@@ -253,8 +264,11 @@ async function staffListScope(req: AuthenticatedRequest): Promise<Prisma.Service
       },
     });
   }
-  if (a.permissions.has(PERMISSION_KEY.MANAGE_AMC_ORDERS)) {
+  if (a.permissions.has(PERMISSION_KEY.MANAGE_AMC_ORDERS) || a.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS)) {
     clauses.push({ kind: SERVICE_REPORT_KIND.AMC, ...(scoped ? { site: siteScope() } : {}) });
+  } else if (seesAssigned) {
+    // A field engineer: AMC reports only for units on which a ticket is assigned to them.
+    clauses.push({ kind: SERVICE_REPORT_KIND.AMC, unit: { complaints: { some: { assignedToId: a.userId } } }, ...(scoped ? { site: siteScope() } : {}) });
   }
   return clauses.length ? { OR: clauses } : null;
 }
@@ -349,17 +363,27 @@ serviceReportsRouter.get("/", async (req: AuthenticatedRequest, res) => {
       select: {
         id: true, poNo: true, poDate: true, amcType: true, amcFrequencyPerYear: true, location: true, customerId: true,
         customer: { select: { name: true } },
-        units: { select: { unit: { select: { id: true, serialNo: true, status: true, site: { select: { companyName: true, address: true } } } } } },
+        units: { select: { unit: { select: { id: true, serialNo: true, status: true, site: { select: { companyName: true, address: true, regionId: true, vendorId: true } } } } } },
       },
     });
     if (!amc) return res.status(req.auth!.customerId ? 404 : 404).json({ error: "AMC order not found" });
-    const staff = await amcStaffAccess(req, null, false);
+    let staff = await amcStaffAccess(req, null, false);
     const customer = isOwnCustomer(req, amc.customerId);
+    // Service staff without an order-wide AMC right (field engineers, vendor / regional service users) see only the units they may handle.
+    let allowedUnitIds: string[] | null = null;
+    const perms = req.auth!.permissions;
+    if (!staff.read && !customer && !req.auth!.customerId && !perms.has(PERMISSION_KEY.MANAGE_AMC_ORDERS) && (perms.has(PERMISSION_KEY.MANAGE_COMPLAINTS) || perms.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS))) {
+      allowedUnitIds = [];
+      for (const l of amc.units) {
+        if ((await amcStaffAccess(req, l.unit.site, true, l.unit.id)).read) allowedUnitIds.push(l.unit.id);
+      }
+      if (allowedUnitIds.length) staff = { read: true, write: true };
+    }
     if (!staff.read && !customer) return res.status(req.auth!.customerId ? 404 : 403).json(req.auth!.customerId ? { error: "AMC order not found" } : { error: "Forbidden" });
 
     const unitFilter = asOptionalString(req.query.unitId);
     const reports = await prisma.serviceReport.findMany({
-      where: { amcOrderId, ...(unitFilter ? { unitId: unitFilter } : {}), ...(staff.read ? {} : { status: { not: SERVICE_REPORT_STATUS.DRAFT } }) },
+      where: { amcOrderId, ...(unitFilter ? { unitId: unitFilter } : {}), ...(allowedUnitIds ? { unitId: { in: allowedUnitIds } } : {}), ...(staff.read ? {} : { status: { not: SERVICE_REPORT_STATUS.DRAFT } }) },
       include: reportInclude,
       orderBy: { createdAt: "asc" },
     });
@@ -369,7 +393,7 @@ serviceReportsRouter.get("/", async (req: AuthenticatedRequest, res) => {
       context: {
         kind: SERVICE_REPORT_KIND.AMC,
         amc: { id: amc.id, ref: amcRef(amc.id), poNo: amc.poNo, poDate: dateOnly(amc.poDate), type: amc.amcType, typeLabel: AMC_TYPE_LABELS[amc.amcType] ?? amc.amcType, location: amc.location, visitsPerYear: amc.amcFrequencyPerYear, customerName: amc.customer.name },
-        units: amc.units.map((l) => ({ id: l.unit.id, serialNo: l.unit.serialNo, status: l.unit.status, siteName: l.unit.site?.companyName ?? null, address: l.unit.site?.address ?? null })),
+        units: amc.units.filter((l) => !allowedUnitIds || allowedUnitIds.includes(l.unit.id)).map((l) => ({ id: l.unit.id, serialNo: l.unit.serialNo, status: l.unit.status, siteName: l.unit.site?.companyName ?? null, address: l.unit.site?.address ?? null })),
       },
     });
   }
@@ -488,8 +512,14 @@ async function createAmcReport(req: AuthenticatedRequest, res: Response) {
     return res.status(400).json({ error: "A service report belongs to a ticket or to an AMC order, not both." });
   }
   // The AMC boundary comes first, before anything about the order is revealed.
-  if (req.auth!.customerId || !req.auth!.permissions.has(PERMISSION_KEY.MANAGE_AMC_ORDERS)) return res.status(403).json({ error: "You cannot create an AMC service report" });
+  const p = req.auth!.permissions;
+  if (req.auth!.customerId || !(p.has(PERMISSION_KEY.MANAGE_AMC_ORDERS) || p.has(PERMISSION_KEY.MANAGE_COMPLAINTS) || p.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS))) {
+    return res.status(403).json({ error: "You cannot create an AMC service report" });
+  }
 
+  if ((req.body as Record<string, unknown>).acknowledgementRequired === false) {
+    return res.status(400).json({ error: "Every service report needs the customer's signature.", code: "SIGNATURE_REQUIRED" });
+  }
   const parsed = createAmcServiceReportSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const d = parsed.data;
@@ -508,7 +538,7 @@ async function createAmcReport(req: AuthenticatedRequest, res: Response) {
   // 3. ... must carry a serial (it is printed on the report) and still be in service.
   if (!unit.serialNo) return res.status(400).json({ error: "That RECD unit has no serial number yet.", code: "UNIT_NO_SERIAL" });
   if (unit.status !== "active") return res.status(400).json({ error: "That RECD unit is retired.", code: "UNIT_RETIRED" });
-  if (!(await amcStaffAccess(req, unit.site)).write) return res.status(403).json({ error: "You cannot create a service report for this site" });
+  if (!(await amcStaffAccess(req, unit.site, true, unit.id)).write) return res.status(403).json({ error: "You cannot create a service report for this site" });
 
   const open = await prisma.serviceReport.findFirst({ where: { amcOrderId: amc.id, unitId: unit.id, status: { in: SERVICE_REPORT_OPEN_STATUSES } }, select: { id: true, reportNumber: true, status: true } });
   if (open) {
@@ -528,7 +558,7 @@ async function createAmcReport(req: AuthenticatedRequest, res: Response) {
           siteId: unit.siteId,
           unitId: unit.id,
           unitSerialNo: unit.serialNo,
-          acknowledgementRequired: d.acknowledgementRequired,
+          acknowledgementRequired: true, // every report needs the customer's signature
           createdById: req.auth!.userId,
           visitDate: new Date(`${d.visitDate}T00:00:00.000Z`),
           workPerformed: d.workPerformed,
@@ -570,11 +600,11 @@ serviceReportsRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
   if (isFinal(report.status)) return res.status(409).json({ error: `A ${report.status} report is final and cannot be edited.`, code: "REPORT_FINAL" });
   if (report.status !== SERVICE_REPORT_STATUS.DRAFT) return res.status(409).json({ error: "This report is awaiting the customer's signature. Reopen it to edit.", code: "REPORT_NOT_DRAFT" });
   if (parsed.data.expectedVersion !== report.version) return staleVersion(res);
-  if (parsed.data.acknowledgementRequired !== undefined && report.kind !== SERVICE_REPORT_KIND.AMC) {
-    return res.status(400).json({ error: "Service reports on a ticket always need the customer's signature." });
+  if ((req.body as Record<string, unknown>)?.acknowledgementRequired === false) {
+    return res.status(400).json({ error: "Every service report needs the customer's signature.", code: "SIGNATURE_REQUIRED" });
   }
 
-  const { expectedVersion, visitDate, partsUsed, remarks, acknowledgementRequired, ...rest } = parsed.data;
+  const { expectedVersion, visitDate, partsUsed, remarks, ...rest } = parsed.data;
   const claimed = await prisma.serviceReport.updateMany({
     // status AND version in the condition: a concurrent submit/edit makes this a no-op instead of an overwrite.
     where: { id: report.id, status: SERVICE_REPORT_STATUS.DRAFT, version: expectedVersion },
@@ -583,7 +613,6 @@ serviceReportsRouter.patch("/:id", async (req: AuthenticatedRequest, res) => {
       ...(visitDate ? { visitDate: new Date(`${visitDate}T00:00:00.000Z`) } : {}),
       ...(partsUsed !== undefined ? { partsUsed: partsUsed || null } : {}),
       ...(remarks !== undefined ? { remarks: remarks || null } : {}),
-      ...(acknowledgementRequired !== undefined ? { acknowledgementRequired } : {}),
       version: { increment: 1 },
     },
   });
@@ -652,8 +681,8 @@ serviceReportsRouter.post("/:id/submit", async (req: AuthenticatedRequest, res) 
   if (!found) return;
   const { report } = found;
   if (!found.staff.write) return res.status(403).json({ error: "You cannot submit this report" });
-  // Needs the customer's signature -> awaiting_signature; explicitly not required (AMC only) -> final "submitted".
-  const target = report.acknowledgementRequired ? SERVICE_REPORT_STATUS.AWAITING_SIGNATURE : SERVICE_REPORT_STATUS.SUBMITTED;
+  // Every report goes to the customer for signature; there is no unsigned finalisation.
+  const target = SERVICE_REPORT_STATUS.AWAITING_SIGNATURE;
   if (!canTransitionServiceReport(report.status, target)) {
     return res.status(409).json({ error: `A ${report.status.replace(/_/g, " ")} report cannot be submitted.`, code: "BAD_TRANSITION" });
   }
@@ -662,56 +691,19 @@ serviceReportsRouter.post("/:id/submit", async (req: AuthenticatedRequest, res) 
   const missing = serviceReportMissingFields(report);
   if (missing.length) return res.status(400).json({ error: `Complete these before submitting: ${missing.join(", ")}.`, missing });
 
-  const contentHash = reportContentHash(report);
-
-  if (target === SERVICE_REPORT_STATUS.AWAITING_SIGNATURE) {
-    const claimed = await prisma.serviceReport.updateMany({
-      where: { id: report.id, status: SERVICE_REPORT_STATUS.DRAFT, version: report.version },
-      data: { status: SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, submittedAt: new Date(), submittedById: req.auth!.userId, contentHash },
-    });
-    if (claimed.count !== 1) return staleVersion(res);
-    const fresh = await prisma.serviceReport.findUniqueOrThrow({ where: { id: report.id }, include: reportInclude });
-    await event(req, fresh, COMPLAINT_EVENT.SERVICE_REPORT_SUBMITTED, SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, SERVICE_REPORT_STATUS.DRAFT);
-    return res.json(toApi(fresh));
-  }
-
-  // Final without a customer signature: build and store the PDF first, then claim the report, and clean up on any failure.
-  const storage = getReportStorage();
-  if (!storage) return res.status(503).json({ error: "Signed-report storage is not configured. Please contact Platino service.", code: "STORAGE_NOT_CONFIGURED" });
-  const submittedAt = new Date();
-  let pdf: Buffer;
-  try {
-    pdf = await buildServiceReportPdf({ ...(await pdfContext(report)), finalState: "submitted", submittedAt, contentHash });
-  } catch (err) {
-    console.error("[service-report] PDF generation failed", err instanceof Error ? err.name : "unknown");
-    return res.status(500).json({ error: "The report PDF could not be created. Nothing was saved - please try again.", code: "PDF_GENERATION_FAILED" });
-  }
-  let stored: Awaited<ReturnType<ReportStorage["put"]>>;
-  try {
-    stored = await storage.put(pdf, "application/pdf");
-  } catch (err) {
-    console.error("[service-report] storing the report failed", err instanceof Error ? err.name : "unknown");
-    return res.status(502).json({ error: "The report could not be stored. Nothing was saved - please try again.", code: "STORAGE_FAILED" });
-  }
-  let count: number;
-  try {
-    const claimed = await prisma.serviceReport.updateMany({
-      where: { id: report.id, status: SERVICE_REPORT_STATUS.DRAFT, version: report.version },
-      data: { status: SERVICE_REPORT_STATUS.SUBMITTED, submittedAt, submittedById: req.auth!.userId, contentHash, pdfFileId: stored.ref, pdfSha256: stored.sha256 },
-    });
-    count = claimed.count;
-  } catch (err) {
-    await discard(storage, [stored.ref]);
-    throw err;
-  }
-  if (count !== 1) {
-    await discard(storage, [stored.ref]);
-    return staleVersion(res);
-  }
+  // A draft written before the unsigned path was withdrawn may still carry acknowledgementRequired = false: it is brought in line
+  // here (the fingerprint is taken with the signature required, so the customer can sign exactly what was submitted).
+  const contentHash = reportContentHash({ ...report, acknowledgementRequired: true });
+  const claimed = await prisma.serviceReport.updateMany({
+    where: { id: report.id, status: SERVICE_REPORT_STATUS.DRAFT, version: report.version },
+    data: { status: SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, submittedAt: new Date(), submittedById: req.auth!.userId, contentHash, acknowledgementRequired: true },
+  });
+  if (claimed.count !== 1) return staleVersion(res);
   const fresh = await prisma.serviceReport.findUniqueOrThrow({ where: { id: report.id }, include: reportInclude });
-  await event(req, fresh, COMPLAINT_EVENT.SERVICE_REPORT_SUBMITTED, SERVICE_REPORT_STATUS.SUBMITTED, SERVICE_REPORT_STATUS.DRAFT, { finalPdfGenerated: true, pdfSha256: stored.sha256, signed: false });
-  res.json(toApi(fresh));
+  await event(req, fresh, COMPLAINT_EVENT.SERVICE_REPORT_SUBMITTED, SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, SERVICE_REPORT_STATUS.DRAFT);
+  return res.json(toApi(fresh));
 });
+
 
 /** Staff pull a report back from "awaiting signature" to fix it. The version moves on, so a customer who had the old one open cannot sign it. */
 serviceReportsRouter.post("/:id/reopen", async (req: AuthenticatedRequest, res) => {

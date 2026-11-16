@@ -131,7 +131,7 @@ const skip = isolated
 
     productId = (await prisma.product.findUniqueOrThrow({ where: { model: "RECD-250" } })).id;
     stageId = (await prisma.stageDefinition.findFirstOrThrow({ orderBy: { sequenceOrder: "asc" } })).id;
-    for (const key of ["customer", "service_engineer", "management", "sales"]) roleIds[key] = (await prisma.role.findUniqueOrThrow({ where: { key } })).id;
+    for (const key of ["customer", "service_engineer", "management", "sales", "service_team", "service_manager"]) roleIds[key] = (await prisma.role.findUniqueOrThrow({ where: { key } })).id;
     world.A = await makeCustomer("A");
     world.B = await makeCustomer("B");
     world.mgmt = await makeUser("manager", "management");
@@ -283,32 +283,32 @@ const skip = isolated
     assert.equal(events[0].detail.unitId, w.units[0].id);
   });
 
-  test("end to end (acknowledgement NOT required): staff finalise it as 'submitted' with a stored PDF that says it is not signed", async () => {
+  test("no unsigned path: 'acknowledgement not required' is refused on create and edit, and a submit never finalises or stores a PDF without the customer", async () => {
     const w = world.A;
-    const before = await reportFileCount();
-    const c = await createAmc(world.mgmt, w, 1, { acknowledgementRequired: false });
+    const refused = await createAmc(world.mgmt, w, 1, { acknowledgementRequired: false });
+    assert.deepEqual([refused.status, refused.body.code], [400, "SIGNATURE_REQUIRED"]);
+    const c = await createAmc(world.mgmt, w, 1);
     assert.equal(c.status, 201, JSON.stringify(c.body));
+    assert.equal(c.body.acknowledgementRequired, true);
+    const edit = await call(world.mgmt, "PATCH", `/service-reports/${c.body.id}`, { expectedVersion: c.body.version, acknowledgementRequired: false });
+    assert.deepEqual([edit.status, edit.body.code], [400, "SIGNATURE_REQUIRED"]);
+    const before = await reportFileCount();
     const s = await call(world.mgmt, "POST", `/service-reports/${c.body.id}/submit`, { expectedVersion: c.body.version });
     assert.equal(s.status, 200, JSON.stringify(s.body));
-    assert.equal(s.body.status, "submitted");
-    assert.equal(await reportFileCount(), before + 1, "one PDF, no signature file");
+    assert.equal(s.body.status, "awaiting_signature");
+    assert.equal(await reportFileCount(), before, "no PDF and no signature file until the customer signs");
     const row = await prisma.serviceReport.findUniqueOrThrow({ where: { id: c.body.id } });
-    assert.deepEqual([row.status, row.signedAt, row.signatureFileId, row.signerName], ["submitted", null, null, null]);
-    assert.ok(row.pdfFileId && row.pdfSha256);
-
-    const d = await call(w.contact, "GET", `/service-reports/${c.body.id}/pdf`);
-    assert.equal(d.status, 200);
-    const text = await pdfText(d.buf);
-    assert.ok(text.includes("SUBMITTED - FINAL, NOT SIGNED") && !text.includes("Signed by") && !text.includes("SIGNED - FINAL"));
-    assert.equal((await sign(w.contact, s.body)).status, 409, "and it can never be signed afterwards");
+    assert.deepEqual([row.status, row.signedAt, row.signatureFileId, row.pdfFileId, row.acknowledgementRequired], ["awaiting_signature", null, null, null, true]);
+    assert.equal((await call(world.mgmt, "POST", `/service-reports/${c.body.id}/sign`, { signerName: "Staff", signatureImage: "data:image/png;base64,AAAA", version: s.body.version, confirm: true })).status, 403, "staff cannot sign for the customer");
   });
 
   test("final reports are immutable - the API refuses, and so does the database, whatever the final state", async () => {
     const w = world.B;
     const signedOne = await awaiting(w, 0);
     await sign(w.contact, signedOne);
-    const c = await createAmc(world.mgmt, w, 1, { acknowledgementRequired: false });
-    const submittedOne = (await call(world.mgmt, "POST", `/service-reports/${c.body.id}/submit`, { expectedVersion: 1 })).body;
+    const c = await createAmc(world.mgmt, w, 1);
+    const awaitingOne = (await call(world.mgmt, "POST", `/service-reports/${c.body.id}/submit`, { expectedVersion: 1 })).body;
+    const submittedOne = (await sign(w.contact, awaitingOne)).body; // a second final report (signed)
     for (const r of [signedOne, submittedOne]) {
       assert.equal((await call(world.mgmt, "PATCH", `/service-reports/${r.id}`, { expectedVersion: r.version, findings: "Rewrite" })).status, 409);
       assert.equal((await call(world.mgmt, "POST", `/service-reports/${r.id}/reopen`, { expectedVersion: r.version })).status, 409);
@@ -351,6 +351,43 @@ const skip = isolated
     }
     const mine = await call(A.contact, "GET", "/service-reports/mine");
     assert.ok(mine.body.reports.every((x: any) => x.customerId === A.customer.id && x.status !== "draft"));
+  });
+
+  test("service staff: the service team and service managers create and read AMC reports; an engineer only for a unit with a ticket assigned to them; the customer, site and unit stay the unit's own", async () => {
+    const A = await freshWorld("R9"), B = world.B;
+    const team = await makeUser("service team", "service_team");
+    const manager = await makeUser("service manager", "service_manager");
+    const eng = await makeUser("assigned engineer", "service_engineer");
+    // Real role permissions are used (not the test's stand-ins): the seeded roles decide.
+    for (const who of [team, manager]) {
+      const c = await createAmc(who, A, 0);
+      assert.equal(c.status, 201, `${who.name}: ${JSON.stringify(c.body)}`);
+      assert.deepEqual([c.body.customerId, c.body.siteId, c.body.unitId, c.body.kind], [A.customer.id, A.site.id, A.units[0].id, "amc"], "derived from the AMC order and the unit");
+      const sub = await call(who, "POST", `/service-reports/${c.body.id}/submit`, { expectedVersion: c.body.version });
+      assert.equal(sub.status, 200, JSON.stringify(sub.body));
+      assert.equal(sub.body.status, "awaiting_signature");
+      assert.equal((await call(who, "GET", `/service-reports?amcOrderId=${A.amc.id}`)).status, 200);
+      assert.equal((await sign(A.contact, sub.body)).status, 200, "the customer signs what the staff member submitted");
+    }
+    // An engineer: nothing until a ticket is assigned to them on THAT unit.
+    assert.equal((await createAmc(eng, A, 1)).status, 403);
+    const ticket = await prisma.complaint.create({
+      data: { ticketNumber: `${PREFIX}-ENG-T${++seq}`, customerId: A.customer.id, siteId: A.site.id, unitId: A.units[1].id, category: "non_performance", description: `${PREFIX} ticket`, severity: "medium", status: "open", assignedToId: eng.id },
+    });
+    try {
+      assert.equal((await createAmc(eng, A, 0)).status, 403, "a ticket on another unit does not open this one");
+      const mine = await createAmc(eng, A, 1);
+      assert.equal(mine.status, 201, JSON.stringify(mine.body));
+      assert.deepEqual([mine.body.customerId, mine.body.siteId, mine.body.unitId], [A.customer.id, A.site.id, A.units[1].id]);
+      assert.equal((await call(eng, "GET", `/service-reports/${mine.body.id}`)).status, 200);
+      const listed = await call(eng, "GET", `/service-reports?amcOrderId=${A.amc.id}`);
+      assert.deepEqual([listed.status, listed.body.reports.map((x: any) => x.unitId)], [200, [A.units[1].id]], "only the unit with their ticket");
+      assert.equal((await createAmc(eng, B, 0)).status, 403, "another customer's AMC order");
+      assert.equal((await call(eng, "POST", `/service-reports/${mine.body.id}/sign`, { signerName: "Eng", signatureImage: pngDataUrl(makePng()), version: mine.body.version, confirm: true })).status, 403, "staff never sign for the customer");
+      await call(eng, "PATCH", `/service-reports/${mine.body.id}`, { expectedVersion: mine.body.version, findings: "Edited by the assigned engineer" }).then((r) => assert.equal(r.status, 200));
+    } finally {
+      await prisma.complaint.deleteMany({ where: { id: ticket.id } });
+    }
   });
 
   test("serial snapshot: the report keeps the serial from when it was written, even if the unit's serial is later changed", async () => {
@@ -421,16 +458,17 @@ const skip = isolated
     assert.equal(await prisma.serviceReportEvent.count({ where: { reportId: r.id, type: "service_report_signed" } }), 1);
   });
 
-  test("simultaneous no-signature submission: exactly one final report and one PDF", async () => {
+  test("simultaneous submission: exactly one wins and nothing is stored until the customer signs", async () => {
     const w = await freshWorld("R3");
-    const c = await createAmc(world.mgmt, w, 0, { acknowledgementRequired: false });
+    const c = await createAmc(world.mgmt, w, 0);
     const before = await reportFileCount();
     const results = await Promise.all(Array.from({ length: 5 }, () => call(world.mgmt, "POST", `/service-reports/${c.body.id}/submit`, { expectedVersion: 1 })));
     assert.equal(results.filter((x) => x.status === 200).length, 1, results.map((x) => x.status).join());
-    assert.equal(await reportFileCount(), before + 1);
+    assert.equal(await reportFileCount(), before);
+    assert.equal((await prisma.serviceReport.findUniqueOrThrow({ where: { id: c.body.id } })).status, "awaiting_signature");
   });
 
-  test("a storage failure leaves no record and no file (signing and no-signature submission), and a retry succeeds", async () => {
+  test("a storage failure leaves no record and no file when signing, and a retry succeeds", async () => {
     const real = getStorage()!;
     let puts = 0;
     setStorage({ ...real, name: "flaky", put: async (b: Buffer, c: string) => { if (++puts === 2) throw new Error("disk full"); return real.put(b, c); }, get: real.get.bind(real), delete: real.delete.bind(real) });
@@ -445,15 +483,6 @@ const skip = isolated
       puts = 10;
       assert.equal((await sign(w.contact, r)).status, 200);
 
-      const c = await createAmc(world.mgmt, w, 1, { acknowledgementRequired: false });
-      const before2 = await reportFileCount();
-      puts = 1; // the next put (#2) fails
-      const failed = await call(world.mgmt, "POST", `/service-reports/${c.body.id}/submit`, { expectedVersion: 1 });
-      assert.equal(failed.status, 502);
-      assert.equal(await reportFileCount(), before2);
-      assert.equal((await prisma.serviceReport.findUniqueOrThrow({ where: { id: c.body.id } })).status, "draft");
-      puts = 10;
-      assert.equal((await call(world.mgmt, "POST", `/service-reports/${c.body.id}/submit`, { expectedVersion: 1 })).status, 200);
     } finally {
       setStorage(undefined);
     }

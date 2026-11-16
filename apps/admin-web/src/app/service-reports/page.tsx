@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { SERVICE_REPORT_STATUS, SERVICE_REPORT_STATUS_LABELS, SERVICE_REPORT_LIMITS, type ServiceReportStatus } from "@recd/shared";
 import { api } from "@/lib/apiClient";
+import { useAuth } from "@/components/AuthContext";
 import { apiErrorMessage } from "@/lib/apiError";
 import { downloadReportPdf } from "@/lib/reportFiles";
 import { reportStatusPill } from "@/lib/serviceReportUi";
@@ -42,6 +43,7 @@ const OPEN: ServiceReportStatus[] = [SERVICE_REPORT_STATUS.DRAFT, SERVICE_REPORT
 function ReportsForTicketOrAmc() {
   const params = useSearchParams();
   const router = useRouter();
+  const { hasPermission } = useAuth();
   const complaintId = params.get("complaintId");
   const amcOrderId = params.get("amcOrderId");
 
@@ -57,7 +59,6 @@ function ReportsForTicketOrAmc() {
   const [visitUnit, setVisitUnit] = useState("");
   const [visitDue, setVisitDue] = useState("");
   const [visitError, setVisitError] = useState<string | null>(null);
-  const [acknowledgementRequired, setAcknowledgementRequired] = useState(true);
   const [form, setForm] = useState({ visitDate: today(), workPerformed: "", findings: "", resolution: "", partsUsed: "", remarks: "" });
 
   const load = useCallback(() => {
@@ -82,7 +83,7 @@ function ReportsForTicketOrAmc() {
     if (!amcOrderId) return;
     api<VisitRow[]>(`/amc-visits?amcOrderId=${encodeURIComponent(amcOrderId)}`).then(setVisits).catch(() => setVisits([]));
   }, [amcOrderId]);
-  useEffect(() => { if (canWrite) loadVisits(); }, [canWrite, loadVisits]);
+  useEffect(() => { if (canWrite && hasPermission("manage_amc_orders")) loadVisits(); }, [canWrite, hasPermission, loadVisits]);
 
   async function scheduleVisit(e: React.FormEvent) {
     e.preventDefault();
@@ -112,7 +113,7 @@ function ReportsForTicketOrAmc() {
     setCreating(true);
     setCreateError(null);
     try {
-      const body = amcOrderId ? { amcOrderId, unitId, acknowledgementRequired, ...form } : { complaintId, ...form };
+      const body = amcOrderId ? { amcOrderId, unitId, ...form } : { complaintId, ...form };
       const created = await api<{ id: string }>("/service-reports", { method: "POST", body: JSON.stringify(body) });
       router.push(`/service-reports/${created.id}`);
     } catch (err) {
@@ -146,7 +147,7 @@ function ReportsForTicketOrAmc() {
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>{title}</h1>
         <p className="mt-1 text-sm text-gray-500">
           {isAmc
-            ? "One report per AMC visit to one RECD unit. The report is written by Platino staff, then either signed by the customer or - where acknowledgement is not required - finalised without a signature."
+            ? "One report per AMC visit to one RECD unit. The report is written by Platino staff, reviewed and signed by the customer, then kept as a signed PDF."
             : "A digital report is written by the service engineer, reviewed and signed by the customer, then kept as a signed PDF."}
         </p>
       </div>
@@ -172,7 +173,7 @@ function ReportsForTicketOrAmc() {
         </dl>
       )}
 
-      {isAmc && canWrite && (
+      {isAmc && canWrite && hasPermission("manage_amc_orders") && (
         <section className="rounded-xl border border-gray-200 bg-white p-4 space-y-3" data-testid="amc-visits">
           <h2 className="text-sm font-semibold">Scheduled visits (due dates for reminders)</h2>
           <p className="text-[11px] text-gray-400">
@@ -223,7 +224,7 @@ function ReportsForTicketOrAmc() {
               <p className="text-xs text-gray-500">
                 Visit {r.visitDate} · {r.engineer.name}
                 {r.kind === "amc" && r.unitSerialNo ? ` · S/N ${r.unitSerialNo}` : ""}
-                {r.kind === "amc" && !r.acknowledgementRequired ? " · no customer signature required" : ""}
+                {r.status === "submitted" ? " · finalised without a customer signature (older report)" : ""}
                 {r.signedAt ? ` · signed by ${r.signerName} on ${new Date(r.signedAt).toLocaleString()}` : ""}
               </p>
             </div>
@@ -260,13 +261,6 @@ function ReportsForTicketOrAmc() {
                 {eligibleUnits.length === 0 && <p className="mt-1 text-[11px] text-amber-600">This AMC order covers no active unit with a serial number, so no report can be written.</p>}
                 {selectedOpen && <p className="mt-1 text-[11px] text-amber-600">Report {selectedOpen.reportNumber} for this unit is still {SERVICE_REPORT_STATUS_LABELS[selectedOpen.status].toLowerCase()}. Finish it first.</p>}
               </div>
-              <label className="flex items-start gap-2 text-sm text-gray-700">
-                <input type="checkbox" className="mt-1" checked={acknowledgementRequired} onChange={(e) => setAcknowledgementRequired(e.target.checked)} data-testid="ack-required" />
-                <span>
-                  The customer must review and sign this report.
-                  <span className="block text-[11px] text-gray-400">Untick only when no acknowledgement is needed; the report is then finalised by staff, marked &ldquo;not signed&rdquo;. You can change this while it is a draft.</span>
-                </span>
-              </label>
             </>
           )}
           <div>

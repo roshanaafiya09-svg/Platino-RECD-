@@ -94,7 +94,9 @@ recdUnitsRouter.get("/:id/history", requirePermission(PERMISSION_KEY.VIEW_SITE_S
   const canManageTickets = perms.has(PERMISSION_KEY.MANAGE_COMPLAINTS) || perms.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW);
   const canSeeTickets = isCustomer || canManageTickets || perms.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS) || perms.has(PERMISSION_KEY.RAISE_COMPLAINT);
   const canSeeEvents = !isCustomer && (canManageTickets || perms.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS));
-  const canSeeAmc = isCustomer || perms.has(PERMISSION_KEY.MANAGE_AMC_ORDERS);
+  // AMC data (and so the way into an AMC service report) is for the AMC boundary, service staff who manage tickets, and - once the ticket check below
+  // shows one assigned to them on this unit - field engineers.
+  const amcEligible = isCustomer || perms.has(PERMISSION_KEY.MANAGE_AMC_ORDERS) || perms.has(PERMISSION_KEY.MANAGE_COMPLAINTS) || perms.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS);
   // Field engineers only see tickets assigned to them (same rule as the complaints list).
   const ticketScope = !isCustomer && !canManageTickets ? { assignedToId: req.auth!.userId } : {};
 
@@ -124,7 +126,7 @@ recdUnitsRouter.get("/:id/history", requirePermission(PERMISSION_KEY.VIEW_SITE_S
       },
       orderBy: { createdAt: "desc" },
     }),
-    !canSeeAmc ? [] : prisma.amcOrderUnit.findMany({
+    !amcEligible ? [] : prisma.amcOrderUnit.findMany({
       where: { unitId: unit.id },
       select: {
         amcOrder: {
@@ -136,6 +138,8 @@ recdUnitsRouter.get("/:id/history", requirePermission(PERMISSION_KEY.VIEW_SITE_S
       },
     }),
   ]);
+
+  const canSeeAmc = isCustomer || perms.has(PERMISSION_KEY.MANAGE_AMC_ORDERS) || perms.has(PERMISSION_KEY.MANAGE_COMPLAINTS) || (perms.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS) && complaints.length > 0);
 
   // Ticket reports that have left draft, for the tickets this caller may already see (same scoping as the tickets above).
   const LEFT_DRAFT = [SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, SERVICE_REPORT_STATUS.SIGNED, SERVICE_REPORT_STATUS.SUBMITTED];
@@ -157,7 +161,7 @@ recdUnitsRouter.get("/:id/history", requirePermission(PERMISSION_KEY.VIEW_SITE_S
       });
   const shapeReport = ({ pdfFileId, ...r }: (typeof serviceReports)[number]) => ({ ...r, pdfAvailable: (r.status === SERVICE_REPORT_STATUS.SIGNED || r.status === SERVICE_REPORT_STATUS.SUBMITTED) && !!pdfFileId });
 
-  const amcOrders = amcLinks
+  const amcOrders = (canSeeAmc ? amcLinks : [])
     .map((l) => {
       const expiresOn = new Date(l.amcOrder.poDate);
       expiresOn.setFullYear(expiresOn.getFullYear() + 1);
