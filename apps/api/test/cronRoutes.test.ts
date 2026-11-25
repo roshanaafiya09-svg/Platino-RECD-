@@ -98,3 +98,28 @@ for (const job of JOBS) {
     }
   });
 }
+
+// Every job Vercel is told to run must be a real GET route that refuses a call without the secret (so a typo in vercel.json, or a route mounted behind
+// the normal login, cannot silently turn a schedule into a daily 401/404). The refused calls never reach a handler body.
+test("every path scheduled in vercel.json is a GET route that is refused without the secret and exists (not 404)", async () => {
+  const cfg = JSON.parse(readFileSync(resolve(__dirname, "..", "vercel.json"), "utf8")) as { crons: { path: string; schedule: string }[] };
+  assert.ok(cfg.crons.length >= 5, "all five jobs are scheduled");
+  assert.equal(new Set(cfg.crons.map((c) => c.path)).size, cfg.crons.length, "no job is scheduled twice");
+  for (const c of cfg.crons) {
+    assert.match(c.schedule, /^\d{1,2} \d{1,2} \* \* \*$/, `${c.path}: a once-a-day schedule`);
+    const r = await get(c.path);
+    assert.equal(r.status, 401, `${c.path} must refuse a call without the secret`);
+  }
+  assert.ok(cfg.crons.some((c) => c.path === "/agent/cron/cleanup-conversations"), "the 30-day conversation cleanup is scheduled");
+});
+
+test("the conversation-cleanup job: the correct secret reaches its handler in the real app (500 here only because the database is unreachable on purpose, not 401/404)", async () => {
+  const saved = console.error;
+  console.error = () => {};
+  try {
+    const r = await get("/agent/cron/cleanup-conversations", `Bearer ${SECRET}`);
+    assert.equal(r.status, 500);
+  } finally {
+    console.error = saved;
+  }
+});

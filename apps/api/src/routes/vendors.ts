@@ -7,8 +7,16 @@ import { asString } from "../lib/params";
 import { isUserEmailConflict, isUserPhoneConflict } from "../lib/uniqueViolations";
 import { generateTempPassword } from "../lib/userAdmin";
 import { logUserAuditStrict } from "../lib/audit";
+import { rateLimit } from "../middleware/rateLimit";
 
 export const vendorsRouter = Router();
+
+/**
+ * Per-IP limit on the unauthenticated registration endpoint, so it cannot be used to flood the vendor list or probe contact e-mails.
+ * Same shared (database-backed) limiter and the same style as the other public endpoints. It only protects real visitors separately if
+ * TRUST_PROXY names the hosting proxy (see .env.example); otherwise every visitor shares one bucket.
+ */
+const vendorRegisterLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10, keyPrefix: "vendor-register" });
 
 /**
  * Create the vendor contact's engineer login on approval, unless a user with that email
@@ -73,7 +81,7 @@ async function createVendorContactLogin(vendor: { id: string; contactName: strin
  * the company has never met gets into the system. Lands in "pending" for management's due
  * diligence. Defined before the authenticate guard below so it stays open.
  */
-vendorsRouter.post("/register", async (req, res) => {
+vendorsRouter.post("/register", vendorRegisterLimiter, async (req, res) => {
   const parsed = registerVendorSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 

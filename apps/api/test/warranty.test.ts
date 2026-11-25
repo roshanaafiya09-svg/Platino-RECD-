@@ -553,6 +553,6 @@ test("every cron route the API mounts is scheduled in vercel.json (requirements 
   const { resolve } = await import("node:path");
   const cfg = JSON.parse(readFileSync(resolve(__dirname, "../vercel.json"), "utf8"));
   const paths = (cfg.crons as Array<{ path: string; schedule: string }>).map((c) => c.path).sort();
-  assert.deepEqual(paths, ["/amc-orders/send-expiry-reminders", "/complaints/cron/escalate", "/reminders/cron/run", "/warranty/cron/send-reminders"]);
+  assert.deepEqual(paths, ["/agent/cron/cleanup-conversations", "/amc-orders/send-expiry-reminders", "/complaints/cron/escalate", "/reminders/cron/run", "/warranty/cron/send-reminders"]);
   for (const c of cfg.crons) assert.match(c.schedule, /^\d+ \d+ \* \* \*$/, "daily");
 });

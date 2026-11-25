@@ -4,7 +4,9 @@
  * X-Total-Count carries the total. Unusable values fall back to the unpaged answer; the page size is capped.
  *
  * SAFETY: refuses to run unless BOTH DATABASE_URL and DIRECT_URL point at the disposable Docker database (localhost:5434/platino_test).
- * It only READS list data and creates / removes one user of its own.
+ * It READS the list data, and tops it up with fixtures of its own when the database holds too few customers or sites to span more than one page
+ * (a freshly seeded database has one of each): those extra customers, orders and sites carry this run's PREFIX and are removed afterwards,
+ * together with the one user it creates.
  */
 import "dotenv/config";
 import test, { describe, before, after } from "node:test";
@@ -33,6 +35,8 @@ const skip = isolated ? false : "DATABASE_URL / DIRECT_URL are not both the isol
   let base = "";
   let token = "";
   let userId = "";
+  const fixture = { customerIds: [] as string[], orderIds: [] as string[] };
+  const NEEDED = 30; // more than one page of 25
 
   before(async () => {
     ({ prisma } = await import("../../src/lib/prisma"));
@@ -44,6 +48,19 @@ const skip = isolated ? false : "DATABASE_URL / DIRECT_URL are not both the isol
     const role = await prisma.role.findUniqueOrThrow({ where: { key: "super_admin" } });
     const u = await prisma.user.create({ data: { name: `${PREFIX} admin`, roleId: role.id, isActive: true, mustChangePassword: false } });
     userId = u.id;
+    // Top up to NEEDED customers and NEEDED sites. A site belongs to exactly one order, so each extra site comes with its own order.
+    const missingCustomers = NEEDED - (await prisma.customer.count());
+    for (let i = 0; i < missingCustomers; i++) fixture.customerIds.push((await prisma.customer.create({ data: { name: `${PREFIX} customer ${i}` } })).id);
+    const missingSites = NEEDED - (await prisma.site.count());
+    if (missingSites > 0) {
+      const product = await prisma.product.findFirstOrThrow({});
+      const stage = await prisma.stageDefinition.findFirstOrThrow({ orderBy: { sequenceOrder: "asc" } });
+      const owner = fixture.customerIds[0] ?? (await prisma.customer.findFirstOrThrow({})).id;
+      for (let i = 0; i < missingSites; i++) {
+        const order = await prisma.order.create({ data: { orderNumber: `${PREFIX}-O${i}`, customerId: owner, productId: product.id, quantity: 1, site: { create: { currentStageId: stage.id, companyName: `${PREFIX} plant ${i}` } } } });
+        fixture.orderIds.push(order.id);
+      }
+    }
     token = signToken({ userId, roleKey: "super_admin", customerId: null, tokenVersion: u.tokenVersion });
     const app = express();
     app.use("/customers", customersRouter);
@@ -54,6 +71,9 @@ const skip = isolated ? false : "DATABASE_URL / DIRECT_URL are not both the isol
 
   after(async () => {
     if (prisma) {
+      await prisma.site.deleteMany({ where: { orderId: { in: fixture.orderIds } } });
+      await prisma.order.deleteMany({ where: { id: { in: fixture.orderIds } } });
+      await prisma.customer.deleteMany({ where: { id: { in: fixture.customerIds } } });
       await prisma.user.deleteMany({ where: { id: userId } });
       await prisma.$disconnect();
     }

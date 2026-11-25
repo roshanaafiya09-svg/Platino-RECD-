@@ -2,6 +2,13 @@ import nodemailer from "nodemailer";
 
 let transporter: ReturnType<typeof nodemailer.createTransport> | null = null;
 
+/**
+ * Upper bounds for talking to the SMTP server. Without them nodemailer waits for its much longer defaults (minutes), and because notifications
+ * are sent inside the request that triggers them, an unreachable or silent mail server would hold that request (and a serverless function) open.
+ * A timeout makes sendMail reject, which sendEmail below already turns into `false` (a failed notification).
+ */
+export const SMTP_TIMEOUTS_MS = { connectionTimeout: 5_000, greetingTimeout: 5_000, socketTimeout: 15_000 } as const;
+
 function getTransporter() {
   if (transporter) return transporter;
 
@@ -16,6 +23,7 @@ function getTransporter() {
     port: Number(port),
     secure: Number(port) === 465,
     auth: { user, pass: password },
+    ...SMTP_TIMEOUTS_MS,
   });
   return transporter;
 }

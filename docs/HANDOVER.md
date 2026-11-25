@@ -241,6 +241,26 @@ A fresh production deploy was triggered immediately after and is **Ready**. Logi
 
 **Local `.env`:** `apps/api/.env` has also been updated to the Mumbai pooler URLs — local `prisma migrate` / `prisma generate` work against the correct DB.
 
+**Update 2026-11-25 — Supabase project reference found in current local configuration (PRODUCTION STATUS UNVERIFIED).** The reference currently found in the local `apps/api/.env` (both `DATABASE_URL` and `DIRECT_URL`, `aws-0-ap-south-1` poolers) and named in `docs/BACKUP_AND_RECOVERY.md` ("Supabase project `Platino-RECD-`, region ap-south-1") is:
+
+| Item | Value |
+|---|---|
+| Supabase project reference | `rbhkltinprrqymtvcall` |
+| Project name / region | `Platino-RECD-` / `ap-south-1` |
+| Found in | local `apps/api/.env` (gitignored) and `docs/BACKUP_AND_RECOVERY.md` |
+| Live Vercel Production `DATABASE_URL` | **Not verified** — Vercel hides the saved value and no existing endpoint reports the connected database |
+
+- This differs from the Mumbai project `qpysyuysgcsrpvlxdglk` recorded above (2026-07-05). **Do not treat either reference as the production database until it is confirmed** against the live API's Production database configuration (the project reference after `postgres.` in the Production `DATABASE_URL`, e.g. via the Vercel–Supabase integration or recent connection/cron activity in each Supabase project's dashboard).
+- **Before any production migration** (including `20261116090000_direct_service_reports`) or restore: compare this reference with the live API's Production database configuration, take and restore-test a fresh backup of the confirmed database, and only then run `prisma migrate deploy`.
+- No password, full connection string or key is recorded here; those stay only in the host's environment settings and gitignored env files.
+
+**Local fixes made 2026-11-25 (UNCOMMITTED, NOT DEPLOYED — nothing below is live; production database identity, deployment status, backup status and production migration status are all still UNVERIFIED):**
+- **Conversation cleanup is now scheduled in `apps/api/vercel.json`:** `GET /agent/cron/cleanup-conversations` daily at 02:30 UTC (it was only a route before; §"Next steps" items that say it is not scheduled describe the state before this change). It logs one line per run (`logCronRun`, counts only). It takes effect only after the API is deployed and `CRON_SECRET` is set; Vercel's plan limits on cron jobs were not checked.
+- **`POST /vendors/register` is rate limited:** 10 requests per hour per client address (shared database-backed limiter, key `vendor-register`; invalid submissions count too; over the limit answers 429 with `Retry-After`). **Deployment configuration:** set `TRUST_PROXY` to the number of proxy hops in front of the API (on Vercel normally `1`); without it every visitor shares one bucket and legitimate registrations can be refused.
+- **SMTP calls have timeouts** (`lib/email.ts`, `SMTP_TIMEOUTS_MS`: connect 5 s, greeting 5 s, socket 15 s). A mail server that does not answer now makes `sendEmail` return `false` (a failed notification) instead of holding the request open.
+- **`test/db/listPaging.db.test.ts` no longer depends on pre-existing data:** the two "listPaging" failures were the test needing more than 25 customers and sites, which a freshly seeded database does not have (it has 1 of each). The test now creates and removes its own rows, and still refuses to run unless both connection URLs point at `localhost:5434/platino_test`.
+- **Migration check (disposable database only):** `20261116090000_direct_service_reports` applied cleanly both on an empty database (34 of 34) and on a seeded database at the previous 33 migrations; the migrated schema matches `schema.prisma` ("No difference detected"). This does not say anything about the production database.
+
 ## 19. Fix — data rendering still slow after the Mumbai migration (2026-07-05, commit `5b5f254`)
 
 **Root cause:** moving the database to Mumbai bought no latency win, because the Vercel **api** function was never moved with it — it was still pinned to `iad1` (Washington D.C., US East), the Vercel default. Confirmed via `get_deployment`: `"regions": ["iad1"]` on the pre-fix deployment. Every request was still paying the same cross-continent round trip (browser in India → `iad1` → Mumbai DB → back) that existed before the migration, just to a different DB city than Tokyo. Pages that fire several sequential API calls on load (dashboard, sites list) compounded this.

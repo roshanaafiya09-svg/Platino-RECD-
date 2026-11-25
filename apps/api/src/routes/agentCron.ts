@@ -7,7 +7,7 @@
  */
 import { Router } from "express";
 import { prisma } from "../lib/prisma";
-import { isAuthorisedCron } from "../lib/cronAuth";
+import { isAuthorisedCron, logCronRun } from "../lib/cronAuth";
 
 export const agentCronRouter = Router();
 
@@ -19,9 +19,11 @@ agentCronRouter.get("/cron/cleanup-conversations", async (req, res) => {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  const cutoff = new Date(Date.now() - THIRTY_DAYS_MS);
+  const startedAt = Date.now();
+  const cutoff = new Date(startedAt - THIRTY_DAYS_MS);
   const result = await prisma.agentConversation.deleteMany({
     where: { updatedAt: { lt: cutoff } },
   });
+  logCronRun("agent-conversation-cleanup", startedAt, { deleted: result.count });
   res.json({ deleted: result.count });
 });
