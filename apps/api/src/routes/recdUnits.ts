@@ -159,6 +159,16 @@ recdUnitsRouter.get("/:id/history", requirePermission(PERMISSION_KEY.VIEW_SITE_S
         select: reportSelect,
         orderBy: { createdAt: "desc" },
       });
+  // DIRECT reports (no ticket, no AMC order) recorded against this unit: the customer's own, managers and overview holders, and a field engineer who has
+  // a ticket assigned on this unit. Only reports that have left draft, as for the other kinds.
+  const canSeeDirect = isCustomer || canManageTickets || (perms.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS) && complaints.length > 0);
+  const directReports = !canSeeDirect
+    ? []
+    : await prisma.serviceReport.findMany({
+        where: { unitId: unit.id, kind: SERVICE_REPORT_KIND.DIRECT, status: { in: LEFT_DRAFT }, ...(isCustomer ? { customerId: req.auth!.customerId! } : {}) },
+        select: reportSelect,
+        orderBy: { createdAt: "desc" },
+      });
   const shapeReport = ({ pdfFileId, ...r }: (typeof serviceReports)[number]) => ({ ...r, pdfAvailable: (r.status === SERVICE_REPORT_STATUS.SIGNED || r.status === SERVICE_REPORT_STATUS.SUBMITTED) && !!pdfFileId });
 
   const amcOrders = (canSeeAmc ? amcLinks : [])
@@ -177,6 +187,7 @@ recdUnitsRouter.get("/:id/history", requirePermission(PERMISSION_KEY.VIEW_SITE_S
     complaints: complaints.map((c) => (isCustomer ? { ...customerTicketView(c), events: [] } : { ...c, events: canSeeEvents && "events" in c ? c.events : [] })),
     serviceReports: serviceReports.map(shapeReport),
     amcServiceReports: amcReports.map(shapeReport),
+    directServiceReports: directReports.map(shapeReport),
     amcOrders,
   });
 });

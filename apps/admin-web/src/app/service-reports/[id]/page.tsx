@@ -14,7 +14,7 @@ import { reportStatusPill } from "@/lib/serviceReportUi";
 interface ReportDetail {
   id: string;
   reportNumber: string;
-  kind: "ticket" | "amc";
+  kind: "ticket" | "amc" | "direct";
   complaintId: string | null;
   ticketNumber: string | null;
   amc: { id: string; ref: string; poNo: string; type: string; typeLabel: string } | null;
@@ -180,13 +180,13 @@ export default function ServiceReportPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link
-            href={report.kind === "amc" && report.amc ? `/service-reports?amcOrderId=${report.amc.id}` : `/service-reports?complaintId=${report.complaintId}`}
+            href={report.kind === "direct" ? "/service-reports" : report.kind === "amc" && report.amc ? `/service-reports?amcOrderId=${report.amc.id}` : `/service-reports?complaintId=${report.complaintId}`}
             className="text-xs text-gray-500 hover:underline"
           >
-            ← All reports for {report.kind === "amc" ? `AMC ${report.amc?.ref ?? ""}` : report.ticketNumber}
+            {report.kind === "direct" ? "← All service reports" : <>← All reports for {report.kind === "amc" ? `AMC ${report.amc?.ref ?? ""}` : report.ticketNumber}</>}
           </Link>
           <h1 className="mt-1 text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>
-            {report.kind === "amc" ? "AMC service report" : "Service report"} {report.reportNumber}
+            {report.kind === "amc" ? "AMC service report" : report.kind === "direct" ? "Direct service report" : "Service report"} {report.reportNumber}
           </h1>
         </div>
         <span className={reportStatusPill(report.status)} data-testid="report-status">{SERVICE_REPORT_STATUS_LABELS[report.status]}</span>
@@ -208,9 +208,11 @@ export default function ServiceReportPage() {
                 ["AMC location", report.amcDetails?.location ?? null],
                 ["Contracted visits per year", report.amcDetails ? String(report.amcDetails.visitsPerYear) : null],
               ]
-            : [["Service ticket", report.ticketNumber]]),
+            : report.kind === "direct"
+              ? [["Report type", "Direct service report (no ticket or AMC order)"]]
+              : [["Service ticket", report.ticketNumber]]),
           ["Site", [report.site?.name, report.site?.address].filter(Boolean).join(", ") || null],
-          ["RECD serial number", report.unit?.serialNo ?? null],
+          ["RECD serial number", report.unit?.serialNo ?? (report.kind === "direct" ? "Not recorded" : null)],
           ["RECD model", report.unit?.model ?? null],
           ["DG", [report.site?.dgModel, report.site?.dgCapacityKva ? `${report.site.dgCapacityKva} kVA` : null].filter(Boolean).join(", ") || null],
           ["Engineer", report.engineer.name],

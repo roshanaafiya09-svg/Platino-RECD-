@@ -7,14 +7,15 @@ import { SERVICE_REPORT_KIND, SERVICE_REPORT_STATUS, SERVICE_REPORT_STATUS_LABEL
 import { api } from "@/lib/apiClient";
 import { apiErrorMessage } from "@/lib/apiError";
 import { downloadReportPdf } from "@/lib/reportFiles";
-import { reportStatusPill } from "@/lib/serviceReportUi";
+import { reportKindLabel, reportKindPill, reportStatusPill } from "@/lib/serviceReportUi";
+import DirectReportForm from "./DirectReportForm";
 import { useAuth } from "@/components/AuthContext";
 import { EMPTY_REPORT_FILTERS, REPORT_LIST_PAGE_SIZE, cleanReportId, pageRange, reportListQuery, reportSource, type ReportListFilters } from "@/lib/serviceReportList";
 
 interface Row {
   id: string;
   reportNumber: string;
-  kind: "ticket" | "amc";
+  kind: "ticket" | "amc" | "direct";
   ticketNumber: string | null;
   amc: { ref: string } | null;
   customerId?: string;
@@ -38,6 +39,10 @@ interface Row {
 export default function AllServiceReports() {
   const { user } = useAuth();
   const isCustomer = user?.role.key === "customer";
+  // The server decides who may create (manage_complaints holders within their scope); the button is only offered to them.
+  const { hasPermission } = useAuth();
+  const canCreateDirect = !isCustomer && hasPermission("manage_complaints");
+  const [showNew, setShowNew] = useState(false);
   // A Customer, Site or DG (RECD unit) page links here with ?customerId= / ?siteId= / ?unitId=; the API still limits the rows to what the user may see.
   const params = useSearchParams();
   const [filters, setFilters] = useState<ReportListFilters>({
@@ -84,14 +89,23 @@ export default function AllServiceReports() {
 
   return (
     <div className="space-y-5 max-w-5xl" data-testid="all-service-reports">
+      <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Service reports</h1>
         <p className="mt-1 text-sm text-gray-500">
           {isCustomer
             ? "Your service reports. Open one to review it and, where asked, sign it."
-            : "Service reports on tickets and AMC visits that you are allowed to see. To write a new report, open the service ticket (Complaints → Service reports) or the AMC order (AMC Order → Service reports, or the AMC section of a RECD unit) and start it there; every report is then signed by the customer."}
+            : "Service reports you are allowed to see. Create one directly with + New Service Report (choose the customer and the DG), or start it from an existing service ticket (Complaints → Service reports) or AMC order (AMC Order → Service reports). Every report is signed by the customer."}
         </p>
       </div>
+      {canCreateDirect && (
+        <button type="button" onClick={() => setShowNew((v) => !v)} className="btn-primary px-4 py-2 text-sm" data-testid="new-service-report-button">
+          + New Service Report
+        </button>
+      )}
+      </div>
+
+      {canCreateDirect && showNew && <DirectReportForm onClose={() => setShowNew(false)} />}
 
       {!isCustomer && (
         <form
@@ -124,7 +138,8 @@ export default function AllServiceReports() {
           <div>
             <label className="block text-[11px] font-medium text-gray-500 mb-1">Type</label>
             <select className="field" value={filters.kind} onChange={(e) => set({ kind: e.target.value })} aria-label="Type">
-              <option value="">Tickets and AMC</option>
+              <option value="">Direct, ticket and AMC</option>
+              <option value={SERVICE_REPORT_KIND.DIRECT}>Direct reports</option>
               <option value={SERVICE_REPORT_KIND.TICKET}>Ticket reports</option>
               <option value={SERVICE_REPORT_KIND.AMC}>AMC reports</option>
             </select>
@@ -174,14 +189,17 @@ export default function AllServiceReports() {
                   <td className="px-3 py-2">
                     <Link href={`/service-reports/${r.id}`} className="font-mono font-bold text-[var(--theme-primary)] hover:underline">{r.reportNumber}</Link>
                   </td>
-                  <td className="px-3 py-2">{reportSource(r)}</td>
+                  <td className="px-3 py-2">
+                    <span className={reportKindPill(r.kind)} data-testid={`report-kind-${r.reportNumber}`}>{reportKindLabel(r.kind)}</span>
+                    <div className="mt-0.5 text-xs text-gray-500">{reportSource(r)}</div>
+                  </td>
                   {!isCustomer && (
                     <td className="px-3 py-2">
                       <div>{r.customerName ?? "-"}</div>
                       <div className="text-xs text-gray-500">{r.siteName ?? "No site"}</div>
                     </td>
                   )}
-                  <td className="px-3 py-2 font-mono text-xs">{r.unitSerial ?? r.unitSerialNo ?? "Serial not entered"}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{r.unitSerial ?? r.unitSerialNo ?? (r.kind === "direct" ? "Not recorded" : "Serial not entered")}</td>
                   <td className="px-3 py-2 whitespace-nowrap">{r.visitDate}<div className="text-xs text-gray-500">{r.engineer.name}</div></td>
                   <td className="px-3 py-2"><span className={reportStatusPill(r.status)}>{SERVICE_REPORT_STATUS_LABELS[r.status] ?? r.status}</span></td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">

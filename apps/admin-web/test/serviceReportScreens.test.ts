@@ -172,6 +172,79 @@ test("customer, site and DG entry points: Customer and Site pages link to their 
   assert.match(all, /params\.get\("siteId"\)/);
   assert.match(all, /params\.get\("unitId"\)/);
   assert.match(all, /data-testid="report-scope-filters"/);
-  assert.match(all, /Start a new report|start it there/, "the page still explains that a report starts from the ticket or the AMC order");
+  assert.match(all, /start it there|from an existing service ticket/, "the page still explains that a report starts from the ticket or the AMC order");
   assert.doesNotMatch(all, /new-report-form/, "no second create form that bypasses the source record");
+});
+
+// ---- Direct service reports (+ New Service Report) ---------------------------------------------------------------------------------------------
+const directForm = read("apps/admin-web/src/app/service-reports/DirectReportForm.tsx");
+const allReports = read("apps/admin-web/src/app/service-reports/AllServiceReports.tsx");
+
+test("Service Reports page: a + New Service Report button (only for staff who may create) opens the direct form; the existing search, filters, paging and the ticket / AMC routes stay", () => {
+  assert.match(allReports, /\+ New Service Report/);
+  assert.match(allReports, /data-testid="new-service-report-button"/);
+  assert.match(allReports, /hasPermission\("manage_complaints"\)/, "offered only to the staff who may create; the API enforces it again");
+  assert.match(allReports, /!isCustomer && hasPermission/, "never for a customer");
+  assert.match(allReports, /<DirectReportForm onClose/);
+  for (const kept of [/data-testid="report-filters"/, /Search service reports/, /aria-label="Status"/, /aria-label="Type"/, /report-scope-filters/, /Clear filters/, /data-testid="reports-paging"/, /REPORT_LIST_PAGE_SIZE/]) assert.match(allReports, kept);
+  assert.match(allReports, /directly with \+ New Service Report/);
+  assert.match(allReports, /existing service ticket/);
+  assert.match(allReports, /SERVICE_REPORT_KIND\.DIRECT/, "a Direct type filter");
+  assert.match(allReports, /reportKindLabel\(r\.kind\)/, "direct, ticket and AMC rows are labelled");
+});
+
+test("direct form: customer first, then that customer's DG; the Site is read-only and comes from the unit; nothing but the unit (and the customer as a cross-check) is sent", () => {
+  assert.ok(directForm.includes('"/service-reports/direct-options"'));
+  assert.ok(directForm.includes("/service-reports/direct-options?customerId=${encodeURIComponent(id)}"), "units are loaded for the chosen customer only");
+  assert.match(directForm, /data-testid="direct-customer-select"/);
+  assert.match(directForm, /data-testid="direct-unit-select"/);
+  assert.match(directForm, /disabled=\{!customerId\}/, "no unit can be chosen before a customer");
+  assert.match(directForm, /setUnitId\(""\)/, "changing the customer clears the unit, so no mismatched pair survives");
+  assert.match(directForm, /data-testid="direct-site-card"/);
+  assert.match(directForm, /Site \(from the selected unit\)/);
+  assert.doesNotMatch(directForm, /<select[^>]*siteId|setSiteId|name="siteId"/, "there is no Site input: it is derived");
+  assert.match(directForm, /Not recorded/, "a unit with no serial reads 'Not recorded'");
+  const body = directForm.split(/\r?\n/).find((l) => l.includes("JSON.stringify({ customerId, unitId")) ?? "";
+  assert.ok(body, "the create call is present");
+  assert.doesNotMatch(body, /siteId|serial|status|kind/i);
+  assert.match(directForm, /method: "POST"/);
+  assert.ok(directForm.includes("router.push(`/service-reports/${created.id}`)"), "the draft opens on the existing report screen, where it is submitted");
+});
+
+test("direct form: validation, the open-ticket suggestion and the open-direct-report block", () => {
+  assert.match(directForm, /const missing = !customerId \|\| !unitId \|\| !form\.visitDate;/);
+  assert.match(directForm, /disabled=\{saving \|\| missing \|\| blocked\}/);
+  assert.match(directForm, /max=\{today\(\)\}/, "no future visit date");
+  assert.match(directForm, /An open service ticket already exists for this DG\. You may create the Service Report from that ticket instead\./);
+  assert.match(directForm, /data-testid="direct-open-ticket-hint"/);
+  assert.ok(directForm.includes("/service-reports?complaintId=${unit.openTicket.id}"));
+  assert.match(directForm, /data-testid="direct-open-report-block"/);
+  assert.match(directForm, /const blocked = !!unit\?\.openDirectReport;/, "only an open DIRECT report blocks; a ticket never does");
+  for (const f of ["Work performed", "Findings / observations", "Resolution / outcome", "Parts used", "Remarks", "Service visit date"]) assert.ok(directForm.includes(f), f);
+  assert.match(directForm, /SERVICE_REPORT_LIMITS\.TEXT_MAX/, "the same limits as the ticket and AMC forms");
+  assert.match(directForm, /apiErrorMessage\(err/, "server refusals (duplicate, mismatch, permission) are shown");
+});
+
+test("direct reports on the screens: labelled apart from ticket and AMC reports, detail page, customer portal and RECD unit history", () => {
+  assert.match(detail, /"direct"/);
+  assert.match(detail, /Direct service report/);
+  assert.match(detail, /report\.kind === "direct" \? "← All service reports"/);
+  assert.match(detail, /"Not recorded"/);
+  assert.match(detail, /Submit for customer signature/);
+  assert.match(portal, /r\.kind === "direct" \? "Service visit"/);
+  assert.match(portal, /\/service-reports\/mine/);
+  assert.match(unitPage, /directServiceReports/);
+  assert.match(unitPage, /data-testid="unit-direct-reports"/);
+  assert.match(unitPage, /unit-amc-reports-link|unit-amc-report-/, "the AMC and ticket report sections are kept");
+  const ui = read("apps/admin-web/src/lib/serviceReportUi.ts");
+  assert.match(ui, /reportKindLabel/);
+  assert.match(ui, /"Direct"/);
+});
+
+test("signing a direct report uses the same screen and the same signature pad as every other report (no second signature system)", () => {
+  assert.doesNotMatch(directForm, /SignaturePad|signatureImage/);
+  assert.match(detail, /<SignaturePad/);
+  assert.match(detail, /p\.canSign/);
+  assert.match(detail, /I have reviewed this report and approve it/);
+  assert.match(detail, /confirm: true/);
 });

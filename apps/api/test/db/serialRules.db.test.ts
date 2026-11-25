@@ -479,7 +479,8 @@ const skip = isolated
     const service = await hist("service");
     assert.equal(service.status, 200);
     assert.equal(service.body.complaints.length, 1);
-    assert.equal(service.body.amcVisible, false, "service desk has no AMC permission");
+    assert.equal(service.body.amcVisible, true, "service desk (manage_complaints) now reaches the AMC section so it can open the AMC order service reports (commit 1b0c323)");
+    assert.equal(service.body.amcOrders.length, 1);
 
     const own = await hist("custA");
     assert.equal(own.status, 200);

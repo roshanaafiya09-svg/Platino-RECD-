@@ -9,8 +9,10 @@ import {
   SERVICE_REPORT_KIND,
   SERVICE_REPORT_OPEN_STATUSES,
   SERVICE_REPORT_STATUS,
+  TICKET_FINISHED_STATUSES,
   canTransitionServiceReport,
   createAmcServiceReportSchema,
+  createDirectServiceReportSchema,
   createServiceReportSchema,
   reopenServiceReportSchema,
   serviceReportMissingFields,
@@ -28,10 +30,13 @@ import { buildServiceReportPdf, type ServiceReportPdfInput } from "../lib/servic
 import { getReportStorage, sha256Hex, type ReportStorage } from "../lib/reportStorage";
 
 /**
- * Digital service reports. Two kinds share ONE table, one state machine, one signature check, one PDF builder and one
+ * Digital service reports. Three kinds share ONE table, one state machine, one signature check, one PDF builder and one
  * file store:
  *   - "ticket" (Requirement 4): a visit on a service ticket.
  *   - "amc"    (Requirement 5): a visit under an AMC order, for ONE RECD unit that the order covers.
+ *   - "direct" (Requirement 4): a visit recorded straight from the Service Reports page against a RECD unit (DG), with no ticket or AMC order.
+ *     The Customer, the Site and the serial snapshot are DERIVED from the chosen unit; nothing but the unit (and an optional customer cross-check)
+ *     comes from the request.
  *
  * States: draft -> awaiting_signature -> signed (final). EVERY report needs the customer's signature: the older "acknowledgement
  * not required" AMC path (draft -> submitted, unsigned) can no longer be started. A "submitted" report that already exists keeps
@@ -45,7 +50,10 @@ import { getReportStorage, sha256Hex, type ReportStorage } from "../lib/reportSt
  *    regional managers) and - only for a unit on which a ticket is ASSIGNED to them - ACT_ASSIGNED_COMPLAINTS (field engineers).
  *    Vendor-scoped users and Regional Managers are additionally limited to their sites/regions. Sales, finance and everyone
  *    holding none of those permissions get nothing.
- *  Customers (both kinds) - read reports of their OWN customer once they have left draft; sign only reports awaiting
+ *  DIRECT reports - write: MANAGE_COMPLAINTS holders (management, service team, service managers, regional managers) for units at sites in their
+ *    vendor / region scope. Read: those, VIEW_COMPLAINTS_OVERVIEW holders, and a field engineer for a unit on which a ticket is assigned to them
+ *    (read only: engineers create reports through their assigned tickets, because a direct report has no assignment to set their scope).
+ *  Customers (all kinds) - read reports of their OWN customer once they have left draft; sign only reports awaiting
  *    signature. The signer is the logged-in customer contact; the typed name and drawn image are recorded evidence.
  *  customerId / siteId / unitId / serial are never read from a request body: tickets give them for ticket reports; the AMC
  *  order and the covered unit give them for AMC reports.
@@ -114,6 +122,29 @@ async function amcStaffAccess(req: AuthenticatedRequest, site: { regionId: strin
   return assigned ? { read: true, write: true } : NONE;
 }
 
+/**
+ * What staff may do with DIRECT reports. Write: MANAGE_COMPLAINTS. Read: that, VIEW_COMPLAINTS_OVERVIEW, or - for a field engineer - a ticket assigned
+ * to them on this unit. Vendor users only see their vendor's sites and Regional Managers only their regions, as for every other report.
+ */
+async function directStaffAccess(req: AuthenticatedRequest, site: { regionId: string | null; vendorId: string | null } | null | undefined, unitId: string | null | undefined): Promise<Access> {
+  const a = req.auth!;
+  if (a.customerId) return NONE;
+  const manage = a.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS);
+  const overview = a.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW);
+  const act = a.permissions.has(PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS);
+  if (!manage && !overview && !act) return NONE;
+  if (a.vendorId && site?.vendorId !== a.vendorId) return NONE;
+  if (a.roleKey === ROLE_KEY.REGIONAL_MANAGER) {
+    const regions = await managedRegionIds(a.userId, a.roleKey);
+    if (!site?.regionId || !regions.includes(site.regionId)) return NONE;
+  }
+  if (manage) return { read: true, write: true };
+  if (overview) return { read: true, write: false };
+  if (!unitId) return NONE;
+  const assigned = await prisma.complaint.findFirst({ where: { assignedToId: a.userId, unitId }, select: { id: true } });
+  return assigned ? { read: true, write: false } : NONE;
+}
+
 const isOwnCustomer = (req: AuthenticatedRequest, customerId: string) => !!req.auth!.customerId && req.auth!.customerId === customerId;
 
 const ticketSelect = {
@@ -139,6 +170,7 @@ type ReportRow = Prisma.ServiceReportGetPayload<{ include: typeof reportInclude 
 
 async function accessTo(req: AuthenticatedRequest, report: ReportRow): Promise<Access> {
   if (report.kind === SERVICE_REPORT_KIND.AMC) return amcStaffAccess(req, report.site, true, report.unitId);
+  if (report.kind === SERVICE_REPORT_KIND.DIRECT) return directStaffAccess(req, report.site, report.unitId);
   return report.complaint ? staffAccess(req, report.complaint) : NONE;
 }
 
@@ -210,7 +242,10 @@ type Fingerprinted = Pick<ReportRow, "reportNumber" | "complaintId" | "customerI
  */
 export function reportContentHash(r: Fingerprinted): string {
   const core = [r.reportNumber, r.complaintId, r.customerId, r.siteId, r.unitId, dateOnly(r.visitDate), r.workPerformed, r.findings, r.resolution, r.partsUsed ?? "", r.remarks ?? "", r.version];
-  return sha256Hex(JSON.stringify(r.kind === SERVICE_REPORT_KIND.AMC ? [...core, "amc", r.amcOrderId, r.unitSerialNo, r.acknowledgementRequired] : core));
+  if (r.kind === SERVICE_REPORT_KIND.AMC) return sha256Hex(JSON.stringify([...core, "amc", r.amcOrderId, r.unitSerialNo, r.acknowledgementRequired]));
+  // A DIRECT report also binds the serial snapshot (empty when the unit has none). The ticket and AMC formulas above are unchanged.
+  if (r.kind === SERVICE_REPORT_KIND.DIRECT) return sha256Hex(JSON.stringify([...core, "direct", r.unitSerialNo ?? ""]));
+  return sha256Hex(JSON.stringify(core));
 }
 
 /** Audit: every report keeps its own history; ticket reports also appear in the ticket history. */
@@ -269,6 +304,12 @@ async function staffListScope(req: AuthenticatedRequest): Promise<Prisma.Service
   } else if (seesAssigned) {
     // A field engineer: AMC reports only for units on which a ticket is assigned to them.
     clauses.push({ kind: SERVICE_REPORT_KIND.AMC, unit: { complaints: { some: { assignedToId: a.userId } } }, ...(scoped ? { site: siteScope() } : {}) });
+  }
+  // DIRECT reports: managers and overview holders see them (site-scoped); a field engineer only those of units with a ticket assigned to them.
+  if (seesAllTickets) {
+    clauses.push({ kind: SERVICE_REPORT_KIND.DIRECT, ...(scoped ? { site: siteScope() } : {}) });
+  } else if (seesAssigned) {
+    clauses.push({ kind: SERVICE_REPORT_KIND.DIRECT, unit: { complaints: { some: { assignedToId: a.userId } } }, ...(scoped ? { site: siteScope() } : {}) });
   }
   return clauses.length ? { OR: clauses } : null;
 }
@@ -411,6 +452,58 @@ serviceReportsRouter.get("/", async (req: AuthenticatedRequest, res) => {
     orderBy: { createdAt: "asc" },
   });
   res.json({ canWrite: staff.write, reports: reports.map(toApi) });
+});
+
+/**
+ * The choices behind "+ New Service Report": WITHOUT a query, the customers the caller may report on (those with an active RECD unit at a site in
+ * their scope); WITH ?customerId=, that customer's active RECD units (DG) with their Site, so the form can show the derived Site read-only and warn
+ * about an open ticket or an open direct report on the unit. Same boundary as creating a direct report (MANAGE_COMPLAINTS; vendor / region scope).
+ */
+serviceReportsRouter.get("/direct-options", async (req: AuthenticatedRequest, res) => {
+  const a = req.auth!;
+  if (a.customerId || !a.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS)) return res.status(403).json({ error: "You cannot create a direct service report" });
+  const regions = a.roleKey === ROLE_KEY.REGIONAL_MANAGER ? await managedRegionIds(a.userId, a.roleKey) : null;
+  const siteScope: Prisma.SiteWhereInput = { ...(a.vendorId ? { vendorId: a.vendorId } : {}), ...(regions ? { regionId: { in: regions } } : {}) };
+  const unitWhere: Prisma.RecdUnitWhereInput = { status: "active", siteId: { not: null }, ...(a.vendorId || regions ? { site: siteScope } : {}) };
+
+  const customerId = asOptionalString(req.query.customerId);
+  if (!customerId) {
+    const customers = await prisma.customer.findMany({
+      where: { orders: { some: { units: { some: unitWhere } } } },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+      take: 500,
+    });
+    return res.json({ customers });
+  }
+
+  const units = await prisma.recdUnit.findMany({
+    where: { ...unitWhere, order: { customerId } },
+    select: {
+      id: true, serialNo: true,
+      product: { select: { name: true, model: true } },
+      site: { select: { id: true, companyName: true, address: true, dgModel: true, dgCapacityKva: true } },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+    take: 300,
+  });
+  const unitIds = units.map((u) => u.id);
+  const [tickets, openReports] = unitIds.length === 0
+    ? [[], []]
+    : await Promise.all([
+        prisma.complaint.findMany({ where: { unitId: { in: unitIds }, archivedAt: null, status: { notIn: TICKET_FINISHED_STATUSES } }, select: { id: true, ticketNumber: true, unitId: true }, orderBy: { createdAt: "desc" } }),
+        prisma.serviceReport.findMany({ where: { kind: SERVICE_REPORT_KIND.DIRECT, unitId: { in: unitIds }, status: { in: SERVICE_REPORT_OPEN_STATUSES } }, select: { id: true, reportNumber: true, unitId: true } }),
+      ]);
+  res.json({
+    units: units.map((u) => ({
+      id: u.id,
+      serialNo: u.serialNo,
+      model: `${u.product.name} (${u.product.model})`,
+      site: u.site ? { id: u.site.id, name: u.site.companyName, address: u.site.address, dgModel: u.site.dgModel, dgCapacityKva: u.site.dgCapacityKva != null ? Number(u.site.dgCapacityKva) : null } : null,
+      openTicket: tickets.find((t) => t.unitId === u.id) ? { id: tickets.find((t) => t.unitId === u.id)!.id, ticketNumber: tickets.find((t) => t.unitId === u.id)!.ticketNumber } : null,
+      openDirectReport: openReports.find((r) => r.unitId === u.id) ?? null,
+    })),
+  });
 });
 
 /** A customer's own reports (tickets and AMC) that have left draft - the customer-facing entry point. */
@@ -580,10 +673,81 @@ async function createAmcReport(req: AuthenticatedRequest, res: Response) {
   return res.status(409).json({ error: "Could not allocate a report number. Nothing was saved - please try again.", code: "REPORT_NUMBER_CONFLICT" });
 }
 
+/**
+ * A DIRECT report: no ticket, no AMC order. The caller names the RECD unit (DG); the Customer, the Site and the serial snapshot are read from that unit
+ * and its order - never from the request. A `customerId` in the body is only a cross-check and is refused when it is not the unit's customer.
+ */
+async function createDirectReport(req: AuthenticatedRequest, res: Response) {
+  // The boundary comes first, before anything about the unit is revealed.
+  if (req.auth!.customerId || !req.auth!.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS)) {
+    return res.status(403).json({ error: "You cannot create a direct service report" });
+  }
+  if ((req.body as Record<string, unknown> | undefined)?.acknowledgementRequired === false) {
+    return res.status(400).json({ error: "Every service report needs the customer's signature.", code: "SIGNATURE_REQUIRED" });
+  }
+  const parsed = createDirectServiceReportSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const d = parsed.data;
+
+  const unit = await prisma.recdUnit.findUnique({
+    where: { id: d.unitId },
+    select: { id: true, serialNo: true, status: true, siteId: true, order: { select: { customerId: true } }, site: { select: { id: true, regionId: true, vendorId: true } } },
+  });
+  if (!unit) return res.status(404).json({ error: "RECD unit not found" });
+  if (d.customerId && d.customerId !== unit.order.customerId) {
+    return res.status(400).json({ error: "That RECD unit does not belong to the selected customer.", code: "CUSTOMER_UNIT_MISMATCH" });
+  }
+  if (unit.status !== "active") return res.status(400).json({ error: "That RECD unit is retired.", code: "UNIT_RETIRED" });
+  if (!unit.siteId || !unit.site) return res.status(400).json({ error: "That RECD unit has no site yet, so a report cannot be recorded against it.", code: "UNIT_NO_SITE" });
+  if (!(await directStaffAccess(req, unit.site, unit.id)).write) return res.status(403).json({ error: "You cannot create a service report for this site" });
+
+  const inProgress = await prisma.serviceReport.findFirst({ where: { kind: SERVICE_REPORT_KIND.DIRECT, unitId: unit.id, status: { in: SERVICE_REPORT_OPEN_STATUSES } }, select: { id: true, reportNumber: true, status: true } });
+  if (inProgress) {
+    return res.status(409).json({ error: `Report ${inProgress.reportNumber} for this unit is still ${inProgress.status.replace(/_/g, " ")}. Finish it first.`, code: "REPORT_IN_PROGRESS", reportId: inProgress.id });
+  }
+
+  const ref = `DSR-${unit.id.slice(-8).toUpperCase()}`;
+  for (let attempt = 0; attempt < MAX_NUMBER_ATTEMPTS; attempt++) {
+    const n = (await prisma.serviceReport.count({ where: { kind: SERVICE_REPORT_KIND.DIRECT, unitId: unit.id } })) + 1 + attempt;
+    try {
+      const created = await prisma.serviceReport.create({
+        data: {
+          reportNumber: `${ref}-R${n}`,
+          kind: SERVICE_REPORT_KIND.DIRECT,
+          // Derived from the RECD unit and its order - never from the request.
+          customerId: unit.order.customerId,
+          siteId: unit.siteId,
+          unitId: unit.id,
+          unitSerialNo: unit.serialNo, // optional: null when the unit has no serial ("Not recorded")
+          acknowledgementRequired: true, // every report needs the customer's signature
+          createdById: req.auth!.userId,
+          visitDate: new Date(`${d.visitDate}T00:00:00.000Z`),
+          workPerformed: d.workPerformed,
+          findings: d.findings,
+          resolution: d.resolution,
+          partsUsed: d.partsUsed || null,
+          remarks: d.remarks || null,
+        },
+        include: reportInclude,
+      });
+      await event(req, created, COMPLAINT_EVENT.SERVICE_REPORT_CREATED, SERVICE_REPORT_STATUS.DRAFT, null, { unitSerialNo: created.unitSerialNo, direct: true });
+      return res.status(201).json(toApi(created));
+    } catch (err) {
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2002") throw err;
+      const raced = await prisma.serviceReport.findFirst({ where: { kind: SERVICE_REPORT_KIND.DIRECT, unitId: unit.id, status: { in: SERVICE_REPORT_OPEN_STATUSES } }, select: { id: true, reportNumber: true } });
+      if (raced) return res.status(409).json({ error: `Report ${raced.reportNumber} was just started for this unit.`, code: "REPORT_IN_PROGRESS", reportId: raced.id });
+      // otherwise a report-number collision: try the next number
+    }
+  }
+  return res.status(409).json({ error: "Could not allocate a report number. Nothing was saved - please try again.", code: "REPORT_NUMBER_CONFLICT" });
+}
+
 serviceReportsRouter.post("/", async (req: AuthenticatedRequest, res) => {
   const body = req.body as Record<string, unknown> | undefined;
   if (body && typeof body === "object" && body.amcOrderId !== undefined) return createAmcReport(req, res);
-  return createTicketReport(req, res);
+  if (body && typeof body === "object" && body.complaintId !== undefined) return createTicketReport(req, res);
+  // Neither a ticket nor an AMC order named: a direct report (the unit is validated there). A body naming nothing at all is a 400 / 403 from that handler.
+  return createDirectReport(req, res);
 });
 
 // ---------------------------------------------------------------------------
@@ -632,7 +796,7 @@ async function pdfContext(report: ReportRow): Promise<Omit<ServiceReportPdfInput
   ]);
   return {
     reportNumber: report.reportNumber,
-    kind: report.kind === SERVICE_REPORT_KIND.AMC ? "amc" : "ticket",
+    kind: report.kind === SERVICE_REPORT_KIND.AMC ? "amc" : report.kind === SERVICE_REPORT_KIND.DIRECT ? "direct" : "ticket",
     ticketNumber: report.complaint?.ticketNumber ?? null,
     amc: report.amcOrder
       ? {

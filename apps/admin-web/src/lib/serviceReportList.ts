@@ -35,13 +35,14 @@ export function reportListQuery(f: ReportListFilters): string {
 }
 
 export interface ReportListRow {
-  kind: "ticket" | "amc";
+  kind: "ticket" | "amc" | "direct";
   ticketNumber: string | null;
   amc: { ref: string } | null;
 }
 
-/** What the row belongs to: the ticket number, or the AMC reference. */
+/** What the row belongs to: the ticket number, the AMC reference, or "Direct report" (recorded against a RECD unit with no ticket or AMC order). */
 export function reportSource(r: ReportListRow): string {
+  if (r.kind === "direct") return "Direct report";
   if (r.kind === "amc") return r.amc?.ref ? `AMC ${r.amc.ref}` : "AMC";
   return r.ticketNumber ?? "Ticket";
 }

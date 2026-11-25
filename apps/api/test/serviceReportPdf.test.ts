@@ -204,3 +204,27 @@ test("a 'signed' PDF cannot be produced without the signature, signer and time",
   await assert.rejects(buildServiceReportPdf(amcBase({ signerName: null })));
   await assert.rejects(buildServiceReportPdf(amcBase({ signedAt: null })));
 });
+
+test("direct signed PDF: identified as a direct service report, with Customer, Site, DG, serial, the customer's name, the signature image and the integrity hash", async () => {
+  const pdf = await buildServiceReportPdf(base({ kind: "direct", reportNumber: "DSR-ABCD1234-R1", ticketNumber: null, engineerName: "Ravi Engineer" }));
+  const text = await textOf(pdf);
+  for (const expected of [
+    "Direct Service Report", "SIGNED - FINAL", "DSR-ABCD1234-R1", "Report type: Direct service report", "Acme Power Pvt Ltd", "Acme Plant 2", "12 Industrial Estate, Coimbatore",
+    "SN-A1-0042", "RECD (RECD-250)", "Kirloskar KG1-250, 250 kVA", "2026-10-14", "Replaced the catalyst housing gasket", "Exhaust leak at the inlet flange", "Leak sealed", "Gasket G-250 x1",
+    "Customer asked for a follow-up check", "Customer signature", "Signed by: Asha Rao", "Signed on:", "Document integrity: SHA-256", "a".repeat(64),
+  ]) assert.ok(text.includes(expected), `direct PDF should contain: ${expected}`);
+  assert.ok(!text.includes("Service ticket:"), "no ticket line");
+  assert.ok(!text.includes("AMC order:") && !text.includes("AMC type"), "no AMC block");
+  assert.ok((pdf.toString("latin1").match(/\/Subtype\s*\/Image/g) ?? []).length >= 1, "the signature image is embedded");
+});
+
+test("direct PDF: a unit without a serial prints 'Not recorded'; a different signature gives a different file; it can never be produced without the signature", async () => {
+  const text = await textOf(await buildServiceReportPdf(base({ kind: "direct", ticketNumber: null, recdSerial: null })));
+  assert.ok(text.includes("RECD serial number: Not recorded"));
+  const ticket = await textOf(await buildServiceReportPdf(base({ recdSerial: null })));
+  assert.ok(!ticket.includes("Not recorded"), "ticket reports keep their dash for a missing serial");
+  const a = await buildServiceReportPdf(base({ kind: "direct", ticketNumber: null }));
+  const b = await buildServiceReportPdf(base({ kind: "direct", ticketNumber: null, signaturePng: makePng({ width: 200, height: 90 }) }));
+  assert.notDeepEqual(a, b);
+  await assert.rejects(buildServiceReportPdf(base({ kind: "direct", ticketNumber: null, signaturePng: null })), /needs the signature image/);
+});

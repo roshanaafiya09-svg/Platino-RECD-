@@ -54,6 +54,8 @@ interface UnitHistory {
   }>;
   /** Digital service reports that have left draft (signed ones have a downloadable PDF). */
   /** AMC visit reports for this unit that have left draft (only for roles that can see the unit's AMC). */
+  /** Direct service reports (no ticket, no AMC order) recorded against this unit, once they have left draft. */
+  directServiceReports?: Array<{ id: string; reportNumber: string; unitSerialNo: string | null; status: ServiceReportStatus; visitDate: string; signedAt: string | null; signerName: string | null; pdfAvailable: boolean }>;
   amcServiceReports?: Array<{ id: string; reportNumber: string; amcOrderId: string | null; unitSerialNo: string | null; status: ServiceReportStatus; visitDate: string; signedAt: string | null; signerName: string | null; pdfAvailable: boolean }>;
   serviceReports?: Array<{ id: string; reportNumber: string; complaintId: string; status: ServiceReportStatus; visitDate: string; signedAt: string | null; signerName: string | null; pdfAvailable: boolean }>;
   amcOrders: Array<{
@@ -220,6 +222,27 @@ export default function RecdUnitDetailPage() {
           </div>
         )}
       </section>
+
+      {(data.directServiceReports ?? []).length > 0 && (
+        <section className="card overflow-hidden" data-testid="unit-direct-reports">
+          <div className="px-4 py-3 border-b"><h2 className="text-sm font-semibold">Direct service reports</h2></div>
+          <div className="px-4 py-3 space-y-2">
+            {(data.directServiceReports ?? []).map((r) => (
+              <div key={r.id} className="flex flex-wrap items-center gap-3 text-xs" data-testid={`unit-direct-report-${r.reportNumber}`}>
+                <Link href={`/service-reports/${r.id}`} className="font-mono font-semibold hover:underline">{r.reportNumber}</Link>
+                <span className={reportStatusPill(r.status)}>{SERVICE_REPORT_STATUS_LABELS[r.status] ?? r.status}</span>
+                <span className="text-gray-500">Visit {formatDate(r.visitDate)}{r.unitSerialNo ? ` · S/N ${r.unitSerialNo}` : ""}</span>
+                {r.signedAt && <span className="text-gray-500">Signed by {r.signerName}</span>}
+                {r.pdfAvailable && (
+                  <button onClick={() => downloadReportPdf(r.id, r.reportNumber).catch(() => alert("The signed report could not be downloaded."))} className="font-medium hover:underline" style={{ color: "var(--theme-primary)" }}>
+                    {r.status === "signed" ? "Download signed PDF" : "Download PDF"}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="card overflow-hidden" data-testid="unit-amc">
         <div className="px-4 py-3 border-b"><h2 className="text-sm font-semibold">AMC</h2></div>

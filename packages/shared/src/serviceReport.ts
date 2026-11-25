@@ -23,8 +23,11 @@ export const SERVICE_REPORT_STATUS_LABELS: Record<ServiceReportStatus, string> =
   submitted: "Submitted (no signature required)",
 };
 
-/** Which kind of visit a report records. Exactly one owner: a ticket (complaint) or an AMC order. */
-export const SERVICE_REPORT_KIND = { TICKET: "ticket", AMC: "amc" } as const;
+/**
+ * Which kind of visit a report records. A ticket (complaint) or an AMC order owns it, or - for a DIRECT report - neither: it is recorded against
+ * a Customer / Site / RECD unit (DG) chosen on the Service Reports page. All three kinds need the customer's signature.
+ */
+export const SERVICE_REPORT_KIND = { TICKET: "ticket", AMC: "amc", DIRECT: "direct" } as const;
 export type ServiceReportKind = (typeof SERVICE_REPORT_KIND)[keyof typeof SERVICE_REPORT_KIND];
 
 /** Statuses that are final: the content can never change again. */
@@ -100,6 +103,16 @@ export const createServiceReportSchema = serviceReportFieldsSchema.extend({
 export const createAmcServiceReportSchema = serviceReportFieldsSchema.extend({
   amcOrderId: z.string().min(1),
   unitId: z.string().min(1),
+});
+
+/**
+ * A DIRECT service report (a visit recorded without a ticket or AMC order). Only the RECD unit (DG) is chosen by the client; the Customer, the
+ * Site and the serial snapshot are DERIVED from that unit by the API. `customerId` may be sent only as a cross-check of what the form showed:
+ * the API refuses it when it does not belong to the unit (no mismatched Customer / Site / DG combination can be saved).
+ */
+export const createDirectServiceReportSchema = serviceReportFieldsSchema.extend({
+  unitId: z.string().min(1),
+  customerId: z.string().min(1).optional(),
 });
 
 // NOTE: spelled out (not serviceReportFieldsSchema.partial()) on purpose. In zod 4, .partial() applies a field's .default("") when the key is

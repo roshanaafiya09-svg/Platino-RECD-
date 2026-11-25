@@ -662,7 +662,7 @@ export default function CustomerPortalPage() {
                   <span>
                     <span className="font-mono text-xs font-bold text-[var(--theme-primary)]">{r.reportNumber}</span>
                     <span className="block text-[10px] text-gray-500">
-                      {r.kind === "amc" ? `AMC visit · ${r.amc?.ref ?? ""}` : `Ticket ${r.ticketNumber ?? ""}`}
+                      {r.kind === "amc" ? `AMC visit · ${r.amc?.ref ?? ""}` : r.kind === "direct" ? "Service visit" : `Ticket ${r.ticketNumber ?? ""}`}
                       {r.unitSerialNo ? ` · S/N ${r.unitSerialNo}` : ""} · {r.visitDate}
                     </span>
                   </span>

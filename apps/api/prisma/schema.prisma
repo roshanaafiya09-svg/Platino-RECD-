@@ -1025,8 +1025,9 @@ model ServiceReport {
   id                      String     @id @default(cuid())
   /// "<ticketNumber>-R<n>"
   reportNumber            String     @unique
-  /// "ticket" (a visit on a service ticket) | "amc" (a visit under an AMC order). EXACTLY ONE of complaintId /
-  /// amcOrderId is set, matching `kind` (CHECK constraint in the migrations).
+  /// "ticket" (a visit on a service ticket) | "amc" (a visit under an AMC order) | "direct" (a visit recorded against a Customer / Site / RECD unit
+  /// with no ticket or AMC order; migration 20261116090000). Ticket and AMC reports set exactly one of complaintId / amcOrderId, matching `kind`;
+  /// a direct report sets neither and requires siteId + unitId (CHECK constraint in the migrations).
   kind                    String     @default("ticket")
   complaintId             String?
   complaint               Complaint? @relation(fields: [complaintId], references: [id], onDelete: Restrict)

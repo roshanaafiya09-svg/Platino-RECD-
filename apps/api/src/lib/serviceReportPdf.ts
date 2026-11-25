@@ -19,8 +19,8 @@ export interface AmcPdfInfo {
 
 export interface ServiceReportPdfInput {
   reportNumber: string;
-  /** "ticket" (default) or "amc". */
-  kind?: "ticket" | "amc";
+  /** "ticket" (default), "amc", or "direct" (recorded against a RECD unit with no ticket or AMC order). */
+  kind?: "ticket" | "amc" | "direct";
   /** Ticket reports only. */
   ticketNumber: string | null;
   /** AMC reports only. */
@@ -58,7 +58,11 @@ export function buildServiceReportPdf(r: ServiceReportPdfInput): Promise<Buffer>
       const doc = new PDFDocument({
         size: "A4",
         margin: 50,
-        info: { Title: `${r.kind === "amc" ? "AMC service report" : "Service report"} ${r.reportNumber}`, Author: "Platino", Subject: r.kind === "amc" ? `AMC ${r.amc?.poNo ?? ""}` : `Ticket ${r.ticketNumber}` },
+        info: {
+          Title: `${r.kind === "amc" ? "AMC service report" : r.kind === "direct" ? "Direct service report" : "Service report"} ${r.reportNumber}`,
+          Author: "Platino",
+          Subject: r.kind === "amc" ? `AMC ${r.amc?.poNo ?? ""}` : r.kind === "direct" ? `RECD ${r.recdSerial ?? "serial not recorded"}` : `Ticket ${r.ticketNumber}`,
+        },
       });
       const chunks: Buffer[] = [];
       doc.on("data", (c: Buffer) => chunks.push(c));
@@ -67,7 +71,7 @@ export function buildServiceReportPdf(r: ServiceReportPdfInput): Promise<Buffer>
 
       const width = doc.page.width - 100;
       const signed = (r.finalState ?? "signed") === "signed";
-      doc.font("Helvetica-Bold").fontSize(18).text(r.kind === "amc" ? "AMC Service Report" : "Service Report");
+      doc.font("Helvetica-Bold").fontSize(18).text(r.kind === "amc" ? "AMC Service Report" : r.kind === "direct" ? "Direct Service Report" : "Service Report");
       doc
         .font("Helvetica")
         .fontSize(10)
@@ -85,12 +89,14 @@ export function buildServiceReportPdf(r: ServiceReportPdfInput): Promise<Buffer>
         row("AMC type", r.amc.typeLabel);
         row("AMC location", r.amc.location);
         row("Contracted visits per year", String(r.amc.frequencyPerYear));
+      } else if (r.kind === "direct") {
+        row("Report type", "Direct service report (recorded against the RECD unit, without a service ticket or AMC order)");
       } else {
         row("Service ticket", r.ticketNumber);
       }
       row("Customer", r.customerName);
       row("Site", [r.siteName, r.siteAddress].filter(Boolean).join(", ") || null);
-      row("RECD serial number", r.recdSerial);
+      row("RECD serial number", r.recdSerial ?? (r.kind === "direct" ? "Not recorded" : null));
       row("RECD model", r.recdModel);
       row("DG", [r.dgModel, r.dgCapacityKva != null ? `${r.dgCapacityKva} kVA` : null].filter(Boolean).join(", ") || null);
       row("Service visit date", dateOnly(r.visitDate));

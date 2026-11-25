@@ -180,7 +180,7 @@ const skip = isolated
     assert.equal(byName.complaintId, "YES");
     assert.equal(byName.kind, "NO");
     const idx = await prisma.$queryRaw`select indexname, indexdef from pg_indexes where tablename = 'ServiceReport' and indexname like 'ServiceReport_one_open%' order by indexname`;
-    assert.deepEqual(idx.map((i: any) => i.indexname), ["ServiceReport_one_open_per_amc_unit", "ServiceReport_one_open_per_complaint"]);
+    assert.deepEqual(idx.map((i: any) => i.indexname), ["ServiceReport_one_open_per_amc_unit", "ServiceReport_one_open_per_complaint", "ServiceReport_one_open_per_direct_unit"], "the direct-report index (migration 20261116090000) sits beside the ticket and AMC ones");
     assert.ok(idx.every((i: any) => /UNIQUE/i.test(i.indexdef) && /draft/.test(i.indexdef)));
     const old = await prisma.$queryRaw`select 1 from pg_indexes where indexname = 'ServiceReport_one_unsigned_per_complaint'`;
     assert.equal(old.length, 0, "the Requirement 4 index was replaced");

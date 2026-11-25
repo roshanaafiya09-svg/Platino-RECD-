@@ -758,3 +758,19 @@ test("ticket reports keep their ORIGINAL content fingerprint, so a ticket report
     "the acknowledgement rule is part of what is approved",
   );
 });
+
+test("DIRECT reports have their own content fingerprint; the ticket and AMC formulas are exactly as before", async () => {
+  const { reportContentHash } = await import("../src/routes/serviceReports");
+  const r = {
+    reportNumber: "DSR-1-R1", complaintId: null, customerId: "cA", siteId: "sA", unitId: "uA", visitDate: new Date("2026-10-14T00:00:00Z"),
+    workPerformed: "w", findings: "f", resolution: "r", partsUsed: null, remarks: null, version: 1, amcOrderId: null, unitSerialNo: null, acknowledgementRequired: true,
+  };
+  const direct = reportContentHash({ ...r, kind: "direct" });
+  assert.match(direct, /^[0-9a-f]{64}$/);
+  assert.equal(direct, createHash("sha256").update(JSON.stringify(["DSR-1-R1", null, "cA", "sA", "uA", "2026-10-14", "w", "f", "r", "", "", 1, "direct", ""])).digest("hex"));
+  assert.notEqual(direct, reportContentHash({ ...r, kind: "ticket" }));
+  assert.notEqual(direct, reportContentHash({ ...r, kind: "direct", unitSerialNo: "SN-9" }), "the serial snapshot is bound");
+  // unchanged: the ticket formula and the AMC formula
+  assert.equal(reportContentHash({ ...r, kind: "ticket" }), createHash("sha256").update(JSON.stringify(["DSR-1-R1", null, "cA", "sA", "uA", "2026-10-14", "w", "f", "r", "", "", 1])).digest("hex"));
+  assert.equal(reportContentHash({ ...r, kind: "amc", amcOrderId: "a1", unitSerialNo: "SN" }), createHash("sha256").update(JSON.stringify(["DSR-1-R1", null, "cA", "sA", "uA", "2026-10-14", "w", "f", "r", "", "", 1, "amc", "a1", "SN", true])).digest("hex"));
+});
