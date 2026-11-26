@@ -460,7 +460,8 @@ const skip = isolated
   test("settings: only an authorised user can change them; values are validated; empty restores the defaults", async () => {
     await resetSettings();
     const ok = { amcDefaultDurationMonths: 18, amcReminderLeadDays: 45, amcReminderRepeatDays: 7 };
-    for (const who of [world.mgmt, world.eng, world.sales, world.custA, world.vend1]) assert.equal((await call(who, "PUT", "/settings/amc", ok)).status, 403);
+    // (Super Admin, Owner / Admin and Management hold manage_settings; the roles below do not)
+    for (const who of [world.eng, world.sales, world.custA, world.vend1]) assert.equal((await call(who, "PUT", "/settings/amc", ok)).status, 403);
     assert.equal((await call(null, "PUT", "/settings/amc", ok)).status, 401);
     for (const bad of [{ ...ok, amcDefaultDurationMonths: 0 }, { ...ok, amcReminderLeadDays: -1 }, { ...ok, amcReminderRepeatDays: 0 }, { ...ok, amcReminderRepeatDays: 91 }, { ...ok, amcDefaultDurationMonths: 1.5 }, { amcDefaultDurationMonths: 12 }]) {
       assert.equal((await call(world.admin, "PUT", "/settings/amc", bad)).status, 400, JSON.stringify(bad));

@@ -47,6 +47,11 @@ export interface ServiceReportPdfInput {
   version: number;
   contentHash: string;
   signaturePng?: Buffer | null;
+  /**
+   * In-person signing: the member of staff whose device the customer signed on. When set, the document says the report was signed IN PERSON on that
+   * device by the person named (the typed name), instead of "by the authenticated customer contact" (the older customer-login signing).
+   */
+  capturedByName?: string | null;
 }
 
 const dateOnly = (d: Date) => d.toISOString().slice(0, 10);
@@ -125,6 +130,7 @@ export function buildServiceReportPdf(r: ServiceReportPdfInput): Promise<Buffer>
         doc.y = boxTop + 108;
         row("Signed by", r.signerName);
         row("Signed on", dateTime(r.signedAt));
+        if (r.capturedByName) row("Signed in person on the device of", r.capturedByName);
       } else {
         doc.moveDown(1.2).font("Helvetica-Bold").fontSize(12).text("Customer acknowledgement");
         doc.font("Helvetica").fontSize(10).text("Not required for this report. It carries no customer signature.", { width });
@@ -138,7 +144,9 @@ export function buildServiceReportPdf(r: ServiceReportPdfInput): Promise<Buffer>
         .text(`Document integrity: SHA-256 of the report content at ${signed ? "signing" : "submission"}: ${r.contentHash}`, { width })
         .text(
           signed
-            ? "This report was reviewed and signed in the Platino RECD Tracker by the authenticated customer contact named above."
+            ? r.capturedByName
+              ? "This report was reviewed and signed in person, on a Platino staff device, by the customer representative named above (the name was typed and the signature drawn by that person in the Platino RECD Tracker)."
+              : "This report was reviewed and signed in the Platino RECD Tracker by the authenticated customer contact named above."
             : "This report was finalised in the Platino RECD Tracker by Platino staff without a customer signature.",
           { width },
         )

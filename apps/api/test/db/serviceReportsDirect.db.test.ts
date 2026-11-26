@@ -120,8 +120,23 @@ describe("direct service reports against the real test database", { skip }, () =
     assert.equal(s.status, 200, JSON.stringify(s.body));
     return s.body;
   }
-  const sign = (as: any, r: any, over: Record<string, unknown> = {}) =>
-    call(as, "POST", `/service-reports/${r.id}/sign`, { signerName: "Asha Rao", signatureImage: pngDataUrl(makePng()), version: r.version, confirm: true, ...over });
+  const startSession = (as: any, r: any, over: Record<string, unknown> = {}) =>
+    call(as, "POST", `/service-reports/${r.id}/signing-session`, { expectedVersion: r.version, handoffConfirmed: true, ...over });
+  const signBody = (r: any, over: Record<string, unknown> = {}) => ({ signerName: "Asha Rao", signatureImage: pngDataUrl(makePng()), version: r.version, confirm: true, ...over });
+  /**
+   * IN-PERSON signing: the staff member `as` hands the device over (the signing session), then the customer's typed name and drawn signature are submitted
+   * from that device. A customer LOGIN is sent straight to the signing route and is refused there. If the hand-over is refused, that answer is returned.
+   */
+  const sign = async (as: any, r: any, over: Record<string, unknown> = {}) => {
+    if (as?.customerId) return call(as, "POST", `/service-reports/${r.id}/sign`, signBody(r, over));
+    let signingSession: unknown = over.signingSession;
+    if (!("signingSession" in over)) {
+      const started = await startSession(as, r);
+      if (started.status !== 200) return started;
+      signingSession = started.body.signingSession;
+    }
+    return call(as, "POST", `/service-reports/${r.id}/sign`, signBody(r, { ...over, signingSession }));
+  };
   const reportFileCount = () => prisma.reportFile.count();
   const pdfText = async (buf: Buffer) => {
     const { PDFParse } = await import("pdf-parse");
@@ -332,7 +347,7 @@ describe("direct service reports against the real test database", { skip }, () =
     assert.equal(detail.body.unit.serialNo, null);
     const sub = await call(W.mgmt, "POST", `/service-reports/${r.body.id}/submit`, { expectedVersion: 1 });
     assert.equal(sub.status, 200, JSON.stringify(sub.body));
-    const signed = await sign(W.A.contact, sub.body);
+    const signed = await sign(W.mgmt, sub.body);
     assert.equal(signed.status, 200, JSON.stringify(signed.body));
     const pdf = await call(W.A.contact, "GET", `/service-reports/${r.body.id}/pdf`);
     assert.ok((await pdfText(pdf.buf)).includes("RECD serial number: Not recorded"));
@@ -426,7 +441,7 @@ describe("direct service reports against the real test database", { skip }, () =
 
     const unit = await newUnit(W.A, true);
     const r1 = await awaiting(W.A, unit);
-    assert.equal((await sign(W.A.contact, r1)).status, 200);
+    assert.equal((await sign(W.mgmt, r1)).status, 200);
     const next = await createDirect(W.mgmt, W.A, unit);
     assert.equal(next.status, 201, "a finished report does not block the next visit");
     assert.ok(next.body.reportNumber.endsWith("-R2") && r1.reportNumber.endsWith("-R1"));
@@ -456,7 +471,8 @@ describe("direct service reports against the real test database", { skip }, () =
     assert.match(row.contentHash, /^[0-9a-f]{64}$/);
     assert.equal(row.contentHash, reportContentHash(row), "the stored fingerprint is the direct-report formula");
     assert.deepEqual([row.signedAt, row.signatureFileId, row.pdfFileId], [null, null, null]);
-    for (const who of [W.mgmt, W.team, W.svcMgr]) assert.equal((await sign(who, sub.body)).status, 403, `${who.name} cannot sign for the customer`);
+    // staff cannot sign for the customer: without the hand-over there is no signature, and a customer login is not the way either
+    for (const who of [W.mgmt, W.team, W.svcMgr]) assert.equal((await call(who, "POST", `/service-reports/${d.body.id}/sign`, signBody(sub.body, { signerName: "Staff Member" }))).status, 400, `${who.name}: no hand-over, no signature`);
     const reopen = await call(W.mgmt, "POST", `/service-reports/${d.body.id}/reopen`, { expectedVersion: sub.body.version });
     assert.deepEqual([reopen.status, reopen.body.status, reopen.body.version], [200, "draft", 3]);
     assert.equal((await rowOf(d.body.id)).contentHash, null);
@@ -482,27 +498,28 @@ describe("direct service reports against the real test database", { skip }, () =
       { signatureImage: "" }, { signatureImage: "data:image/png;base64,AAAA" }, { signatureImage: "not-an-image" }, { signatureImage: pngDataUrl(empty) },
       { signatureImage: "data:image/png;base64," + "A".repeat(300_000) }, { confirm: false }, { signerName: "" },
     ]) {
-      const s = await sign(W.A.contact, r, over as any);
+      const s = await sign(W.mgmt, r, over as any);
       assert.ok([400].includes(s.status), `${JSON.stringify(over).slice(0, 60)} -> ${s.status}`);
     }
-    assert.equal((await call(W.A.contact, "POST", `/service-reports/${r.id}/sign`, { signerName: "Asha Rao", version: r.version, confirm: true })).status, 400, "no signature field");
+    assert.equal((await call(W.mgmt, "POST", `/service-reports/${r.id}/sign`, { signerName: "Asha Rao", version: r.version, confirm: true })).status, 400, "no signature field");
     assert.equal(await reportFileCount(), before);
     assert.deepEqual([(await rowOf(r.id)).status, (await rowOf(r.id)).signatureFileId], ["awaiting_signature", null]);
-    assert.equal((await sign(W.B.contact, r)).status, 404, "another customer");
+    const customerSign = await sign(W.B.contact, r);
+    assert.deepEqual([customerSign.status, customerSign.body.code], [403, "IN_PERSON_ONLY"], "a customer login cannot sign");
     assert.equal((await sign(W.eng, r)).status, 403);
     assert.equal((await call(null, "POST", `/service-reports/${r.id}/sign`, {})).status, 401);
-    assert.equal((await sign(W.A.contact, r, { version: 99 })).body.code, "STALE_VERSION");
+    assert.equal((await sign(W.mgmt, r, { version: 99 })).body.code, "STALE_VERSION");
   });
 
   test("end to end: the customer signs, the signed PDF holds the real signature and the Customer / Site / DG, and the report is permanent", async () => {
     const u = await newUnit(W.A, true);
     const r = await awaiting(W.A, u, W.team);
     const files = await reportFileCount();
-    const s = await sign(W.A.contact, r);
+    const s = await sign(W.mgmt, r);
     assert.equal(s.status, 200, JSON.stringify(s.body));
     assert.equal(await reportFileCount(), files + 2, "the signature image and the signed PDF");
     const row = await rowOf(r.id);
-    assert.deepEqual([row.status, row.signerName, row.signedById, row.signedVersion], ["signed", "Asha Rao", W.A.contact.id, r.version]);
+    assert.deepEqual([row.status, row.signerName, row.signedById, row.signedVersion], ["signed", "Asha Rao", null, r.version]);
     assert.ok(row.signedAt && row.pdfFileId && row.signatureFileId && row.pdfSha256);
     assert.deepEqual([row.complaintId, row.amcOrderId, row.customerId, row.siteId, row.unitId], [null, null, W.A.customer.id, W.A.site.id, u.id]);
 
@@ -524,14 +541,14 @@ describe("direct service reports against the real test database", { skip }, () =
     assert.equal((await call(W.eng, "GET", `/service-reports/${r.id}/pdf`)).status, 403, "an engineer with no ticket on the unit");
     assert.equal((await call(null, "GET", `/service-reports/${r.id}/pdf`)).status, 401);
     const events = await prisma.serviceReportEvent.findMany({ where: { reportId: r.id }, orderBy: { createdAt: "asc" } });
-    assert.deepEqual(events.map((e: any) => e.type), ["service_report_created", "service_report_submitted", "service_report_signed"]);
-    assert.equal(events[2].actorId, W.A.contact.id);
+    assert.deepEqual(events.map((e: any) => e.type), ["service_report_created", "service_report_submitted", "service_report_signing_started", "service_report_signed"]);
+    assert.deepEqual([events[2].type, events[3].type, events[3].actorId, events[3].detail.mode, events[3].detail.signerName], ["service_report_signing_started", "service_report_signed", W.mgmt.id, "in_person", "Asha Rao"], "the staff member who operated the device is the actor; the signer is the typed name");
 
     // immutability: the API and the database both refuse any change, whatever the route
     assert.equal((await call(W.mgmt, "PATCH", `/service-reports/${r.id}`, { expectedVersion: r.version, findings: "Rewrite", siteId: W.B.site.id })).status, 409);
     assert.equal((await call(W.mgmt, "POST", `/service-reports/${r.id}/reopen`, { expectedVersion: r.version })).status, 409);
     assert.equal((await call(W.mgmt, "POST", `/service-reports/${r.id}/submit`, { expectedVersion: r.version })).status, 409);
-    assert.equal((await sign(W.A.contact, r)).status, 409, "a second signature");
+    assert.equal((await sign(W.mgmt, r)).status, 409, "a second signature");
     for (const change of [{ findings: "Rewrite" }, { unitSerialNo: "FAKE" }, { siteId: W.B.site.id }, { unitId: null }, { kind: "ticket" }, { pdfSha256: "0".repeat(64) }, { status: "draft" }]) {
       await assert.rejects(prisma.serviceReport.update({ where: { id: r.id }, data: change }), /final and cannot be changed|check constraint/i, JSON.stringify(change));
     }
@@ -570,10 +587,8 @@ describe("direct service reports against the real test database", { skip }, () =
     assert.ok(ids(vendor).has(sent.id) && !ids(vendor).has(bReport.id), "a vendor user: their vendor's sites only");
     assert.equal((await call(W.sales, "GET", "/service-reports")).status, 403);
 
-    const mine = await call(W.A.contact, "GET", "/service-reports/mine");
-    assert.ok(mine.body.reports.some((r: any) => r.id === sent.id && r.kind === "direct"));
-    assert.ok(!mine.body.reports.some((r: any) => r.id === draft.id), "no draft for the customer");
-    assert.ok(mine.body.reports.every((r: any) => r.customerId === W.A.customer.id), "only their own customer's");
+    assert.equal((await call(W.A.contact, "GET", "/service-reports/mine")).status, 404, "the customer's own list (/mine) is gone");
+    assert.equal((await call(W.A.contact, "GET", `/service-reports/${draft.id}`)).status, 404, "no draft for the customer");
     assert.equal((await call(W.A.contact, "GET", `/service-reports/${bReport.id}`)).status, 404);
 
     // the RECD unit's history lists its direct reports (left draft) for staff and the owning customer only
@@ -595,7 +610,7 @@ describe("direct service reports against the real test database", { skip }, () =
     await assignTicket(W.A, u, W.eng);
     const seen = await call(W.eng, "GET", `/service-reports/${r.id}`);
     assert.equal(seen.status, 200, JSON.stringify(seen.body));
-    assert.deepEqual([seen.body.permissions.canEdit, seen.body.permissions.canSubmit, seen.body.permissions.canReopen, seen.body.permissions.canSign], [false, false, false, false]);
+    assert.deepEqual([seen.body.permissions.canEdit, seen.body.permissions.canSubmit, seen.body.permissions.canReopen, seen.body.permissions.canCollectSignature], [false, false, false, false]);
     assert.equal(new Set((await call(W.eng, "GET", `/service-reports?kind=direct&q=${PREFIX}`)).body.reports.map((x: any) => x.id)).has(r.id), true);
     assert.equal((await call(W.eng, "POST", `/service-reports/${r.id}/reopen`, { expectedVersion: r.version })).status, 403);
     assert.equal((await call(W.eng, "PATCH", `/service-reports/${r.id}`, { expectedVersion: r.version, findings: "x" })).status, 403);

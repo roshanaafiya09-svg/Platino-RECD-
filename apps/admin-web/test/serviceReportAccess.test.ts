@@ -4,7 +4,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { isCustomerReportPath, SERVICE_REPORT_LIST_PERMISSIONS } from "../src/lib/routeAccess";
+import * as access from "../src/lib/routeAccess";
+import { isInPersonSigningPath, SERVICE_REPORT_LIST_PERMISSIONS } from "../src/lib/routeAccess";
 import { EMPTY_REPORT_FILTERS, REPORT_LIST_PAGE_SIZE, cleanReportId, pageRange, reportListQuery, reportSource } from "../src/lib/serviceReportList";
 
 const root = resolve(__dirname, "../../..");
@@ -18,28 +19,25 @@ const unitPage = read("apps/admin-web/src/app/recd-units/[id]/page.tsx");
 const complaints = read("apps/admin-web/src/app/complaints/page.tsx");
 const remindersApi = read("apps/api/src/routes/reminders.ts");
 
-test("a customer may open the report list and a single report - and nothing else besides the portal", () => {
-  for (const ok of ["/service-reports", "/service-reports/", "/service-reports/ckabc123"]) assert.equal(isCustomerReportPath(ok), true, ok);
-  for (const no of ["/", "/customer/portal", "/complaints", "/customers", "/orders", "/service-reports/ckabc123/pdf", "/service-reports/a/b", "/service-reports-evil", "/xservice-reports", "/amc-orders"]) {
-    assert.equal(isCustomerReportPath(no), false, no);
+test("a customer may open the portal only - the old customer report-page rule is gone; the in-person signing page has its own exact rule", () => {
+  assert.equal((access as Record<string, unknown>).isCustomerReportPath, undefined, "no helper lets a customer onto a report page any more");
+  for (const yes of ["/service-reports/ckabc123/sign", "/service-reports/ckabc123/sign/"]) assert.equal(isInPersonSigningPath(yes), true, yes);
+  for (const no of ["/", "/service-reports", "/service-reports/ckabc123", "/service-reports/sign", "/service-reports/a/sign/b", "/service-reports/ckabc123/pdf", "/customer/portal", "/service-reports-evil/x/sign", "/x/service-reports/a/sign"]) {
+    assert.equal(isInPersonSigningPath(no), false, no);
   }
 });
 
-test("REGRESSION: every service-report link the customer portal renders lands on a page a customer may open (it used to bounce back to the portal)", () => {
-  const hrefs = [...portal.matchAll(/href=\{`([^`]*service-reports[^`]*)`\}/g)].map((m) => m[1]);
-  assert.ok(hrefs.length >= 2, "the portal links to the ticket's reports and to each report");
-  for (const href of hrefs) {
-    const path = href.replace(/\$\{[^}]*\}/g, "someid").split("?")[0];
-    assert.equal(isCustomerReportPath(path), true, `${href} -> ${path}`);
-  }
-  assert.ok(hrefs.some((h) => h.includes("?complaintId=")), "the ticket link carries the ticket in the query string, which is not part of the path the guard checks");
+test("the customer portal renders no service-report link at all (nothing for a customer to bounce off, nothing that tells them to sign there)", () => {
+  assert.doesNotMatch(portal, /service-reports/);
+  assert.doesNotMatch(portal, /Service reports &amp; signing|Review & sign/);
 });
 
-test("the guard uses that one rule for the redirect AND for what it renders to a customer", () => {
-  assert.match(guard, /import \{ isCustomerReportPath, SERVICE_REPORT_LIST_PERMISSIONS \} from "@\/lib\/routeAccess"/);
-  assert.match(guard, /pathname !== "\/customer\/portal" && !isCustomerReportPath\(pathname\)/);
-  assert.match(guard, /isCustomerPortal \|\| isCustomerReportPath\(pathname\)/);
-  assert.doesNotMatch(guard, /function isCustomerReportPath/, "no second, stricter copy of the rule");
+test("the guard sends every customer to the portal and renders only the portal for them; the signing page is for staff", () => {
+  assert.match(guard, /import \{ isInPersonSigningPath, SERVICE_REPORT_LIST_PERMISSIONS \} from "@\/lib\/routeAccess"/);
+  assert.match(guard, /pathname !== "\/customer\/portal"\) router\.push\("\/customer\/portal"\)/);
+  assert.match(guard, /return isCustomerPortal \? \(/);
+  assert.doesNotMatch(guard, /isCustomerReportPath/);
+  assert.doesNotMatch(guard, /function isInPersonSigningPath/, "one shared rule, not a second copy");
 });
 
 test("staff: the report list has a menu entry and a route rule, both limited to people who hold a ticket or AMC permission", () => {
@@ -56,10 +54,10 @@ test("links from other screens still point at the per-ticket / per-AMC lists and
   assert.match(page, /if \(!params\.get\("complaintId"\) && !params\.get\("amcOrderId"\)\) return <AllServiceReports \/>/, "no ticket / AMC order in the address -> the list");
 });
 
-test("the list screen: customers read /mine (own non-draft reports) with no staff filters; staff read the scoped list with filters and paging; nobody gets a create form here", () => {
-  assert.match(all, /api<\{ reports: Row\[\] \}>\("\/service-reports\/mine"\)/);
+test("the list screen: staff read the scoped list with filters and paging; there is no customer branch and no create form that bypasses the source record", () => {
+  assert.doesNotMatch(all, /\/service-reports\/mine|isCustomer/);
   assert.match(all, /`\/service-reports\?\$\{reportListQuery\(filters\)\}`/);
-  assert.match(all, /!isCustomer && \(\s*<form/, "filters only for staff");
+  assert.match(all, /<form/, "the filters");
   assert.match(all, /data-testid="reports-paging"/);
   assert.doesNotMatch(all, /method: "POST"/, "listing never writes");
   for (const col of ["Report", "For", "Customer / site", "RECD serial", "Status"]) assert.match(all, new RegExp(col), col);

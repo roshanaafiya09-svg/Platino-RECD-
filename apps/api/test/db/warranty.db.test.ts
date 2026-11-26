@@ -354,7 +354,8 @@ const skip = isolated
   test("settings: only manage_settings may change the warranty reminder values; invalid values change nothing", async () => {
     await resetSettings();
     const ok = { warrantyReminderLeadDays: 45, warrantyReminderRepeatDays: 7 };
-    for (const who of [world.mgmt, world.sales, world.custA, world.vend1]) assert.equal((await call(who, "PUT", "/settings/warranty", ok)).status, 403);
+    // (Super Admin, Owner / Admin and Management hold manage_settings; the roles below do not)
+    for (const who of [world.sales, world.custA, world.vend1]) assert.equal((await call(who, "PUT", "/settings/warranty", ok)).status, 403);
     for (const bad of [{ ...ok, warrantyReminderLeadDays: -1 }, { ...ok, warrantyReminderRepeatDays: 0 }, { ...ok, warrantyReminderLeadDays: 400 }]) assert.equal((await call(world.admin, "PUT", "/settings/warranty", bad)).status, 400);
     assert.deepEqual(await lib.loadWarrantyPolicy(), { reminderLeadDays: 30, reminderRepeatDays: 3 });
     assert.deepEqual((await call(world.admin, "PUT", "/settings/warranty", ok)).body, ok);

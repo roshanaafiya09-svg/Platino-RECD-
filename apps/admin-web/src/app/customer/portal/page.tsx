@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useAuth } from "@/components/AuthContext";
 import { api } from "@/lib/apiClient";
 import CustomerWarrantyCard from "@/components/CustomerWarrantyCard";
-import { SERVICE_REPORT_STATUS_LABELS, type ServiceReportStatus as SvcReportStatus, ISSUE_CATEGORY_LABELS, buildComplaintBody, eligibleComplaintUnits, requiresUnitSelection } from "@recd/shared";
+import { ISSUE_CATEGORY_LABELS, buildComplaintBody, eligibleComplaintUnits, requiresUnitSelection } from "@recd/shared";
 import { formatOptionalDate } from "@/lib/format";
 
 const ISSUE_CATEGORY_OPTIONS = Object.entries(ISSUE_CATEGORY_LABELS);
@@ -92,7 +91,6 @@ export default function CustomerPortalPage() {
   const [site, setSite] = useState<SiteDetail | null>(null);
   const [stages, setStages] = useState<StageDefinition[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
-  const [myReports, setMyReports] = useState<Array<{ id: string; reportNumber: string; kind: string; status: SvcReportStatus; visitDate: string; unitSerialNo: string | null; amc: { ref: string } | null; ticketNumber: string | null }>>([]);
   const [loading, setLoading] = useState(true);
 
   // New Complaint Form
@@ -151,8 +149,6 @@ export default function CustomerPortalPage() {
       // Fetch complaints
       const complaintsData = await api<Complaint[]>("/complaints");
       setComplaints(complaintsData);
-      // Digital service reports (ticket and AMC) that have left draft; a failure here must not break the portal.
-      api<{ reports: typeof myReports }>("/service-reports/mine").then((r) => setMyReports(r.reports)).catch(() => setMyReports([]));
     } catch (err) {
       console.error("Failed to load customer portal data", err);
     } finally {
@@ -653,28 +649,6 @@ export default function CustomerPortalPage() {
             </form>
           </section>
 
-          {/* Digital service reports (tickets and AMC visits) */}
-          <section className="card p-6" data-testid="my-service-reports">
-            <h3 className="text-md font-bold mb-4">Service Reports</h3>
-            <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-              {myReports.map((r) => (
-                <Link key={r.id} href={`/service-reports/${r.id}`} className="flex items-center justify-between rounded-xl border border-gray-100 p-3 hover:bg-gray-50">
-                  <span>
-                    <span className="font-mono text-xs font-bold text-[var(--theme-primary)]">{r.reportNumber}</span>
-                    <span className="block text-[10px] text-gray-500">
-                      {r.kind === "amc" ? `AMC visit · ${r.amc?.ref ?? ""}` : r.kind === "direct" ? "Service visit" : `Ticket ${r.ticketNumber ?? ""}`}
-                      {r.unitSerialNo ? ` · S/N ${r.unitSerialNo}` : ""} · {r.visitDate}
-                    </span>
-                  </span>
-                  <span className={`status-pill ${r.status === "awaiting_signature" ? "status-pill-warning" : r.status === "signed" ? "status-pill-success" : ""}`}>
-                    {r.status === "awaiting_signature" ? "Review & sign" : SERVICE_REPORT_STATUS_LABELS[r.status] ?? r.status}
-                  </span>
-                </Link>
-              ))}
-              {myReports.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No service reports yet.</p>}
-            </div>
-          </section>
-
           {/* Active Support Tickets */}
           <section className="card p-6">
             <h3 className="text-md font-bold mb-4">Support History</h3>
@@ -699,9 +673,6 @@ export default function CustomerPortalPage() {
                     <span>Severity: <strong className="text-gray-500">{c.severity}</strong></span>
                     <span>{new Date(c.createdAt).toLocaleDateString()}</span>
                   </div>
-                  <Link href={`/service-reports?complaintId=${c.id}`} className="inline-block text-[11px] font-semibold text-[var(--theme-accent)] hover:underline">
-                    Service reports &amp; signing
-                  </Link>
                 </div>
               ))}
 

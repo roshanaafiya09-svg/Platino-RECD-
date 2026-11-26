@@ -16,6 +16,7 @@ const portal = read("apps/admin-web/src/app/customer/portal/page.tsx");
 const unitPage = read("apps/admin-web/src/app/recd-units/[id]/page.tsx");
 const guard = read("apps/admin-web/src/components/AuthGuard.tsx");
 const files = read("apps/admin-web/src/lib/reportFiles.ts");
+const signPage = read("apps/admin-web/src/app/service-reports/[id]/sign/page.tsx");
 
 test("signature pad: drawn with mouse, finger or stylus (Pointer Events), no page scroll while signing, clearable", () => {
   assert.match(pad, /onPointerDown/);
@@ -29,33 +30,66 @@ test("signature pad: drawn with mouse, finger or stylus (Pointer Events), no pag
   assert.match(pad, /disabled/);
 });
 
-test("signing screen: the customer reviews the report, types a name, draws, confirms - and cannot sign until all are done", () => {
-  assert.match(detail, /Review and sign/);
-  assert.match(detail, /<SignaturePad/);
-  assert.match(detail, /const canFinishSigning = !!signatureImage && signerName\.trim\(\)\.length >= SERVICE_REPORT_LIMITS\.SIGNER_NAME_MIN && confirm/);
-  assert.match(detail, /disabled=\{!canFinishSigning\}/);
-  assert.match(detail, /I have reviewed this report and approve it/);
-  assert.match(detail, /p\.canSign/, "the section only shows when the server says this user may sign");
-  assert.match(detail, /version: report!\.version/, "the signature is bound to the version that was reviewed");
-  assert.match(detail, /confirm: true/);
+test("in-person signing screen: starts with the hand-over addressed to staff; only then does the customer see the report, type their OWN name, draw, approve - and cannot sign until all are done", () => {
+  // step 1: addressed to staff, and it is the default step
+  assert.match(signPage, /useState<Stage>\("handoff"\)/);
+  assert.match(signPage, /Hand this device to the customer/);
+  assert.match(signPage, /Do <strong>not<\/strong> type the customer&apos;s name, draw the signature or approve the report for them/);
+  assert.match(signPage, /The customer has the device – start signing/);
+  assert.match(signPage, /\/signing-session/);
+  assert.match(signPage, /handoffConfirmed: true/);
+  // the customer step is only reached after the server has issued the session
+  assert.ok(signPage.indexOf('setStage("customer")') > signPage.indexOf("setSession(r.signingSession)"), "the customer step opens only after the session was issued");
+  // step 2: addressed to the customer
+  assert.match(signPage, /Please review and sign your service report/);
+  assert.match(signPage, /<SignaturePad/);
+  assert.match(signPage, /const canSignNow = !!signatureImage && signerName\.trim\(\)\.length >= SERVICE_REPORT_LIMITS\.SIGNER_NAME_MIN && confirm/);
+  assert.match(signPage, /disabled=\{!canSignNow\}/);
+  assert.match(signPage, /I have reviewed this report and approve it/);
+  assert.match(signPage, /Sign and finalise/);
+  assert.match(signPage, /version: report\.version/, "the signature is bound to the version that was shown");
+  assert.match(signPage, /confirm: true/);
+  assert.match(signPage, /signingSession: session/);
+  // the name box starts EMPTY and is never filled from the staff login
+  assert.match(signPage, /useState\(""\)/);
+  assert.doesNotMatch(signPage, /useAuth|user\?\.name|user\.name/, "the signer's name is never taken from the logged-in staff member");
+  assert.match(signPage, /Type your own name/);
+  // the report is shown read-only before signing
+  assert.match(signPage, /data-testid="signing-report-summary"/);
+  for (const section of ["Work performed", "Findings / observations", "Resolution / outcome"]) assert.ok(signPage.includes(section), section);
 });
 
-test("signing screen: success and failure are both shown, and a stale or already-signed answer reloads the report", () => {
-  assert.match(detail, /the report is signed and final/);
-  assert.match(detail, /kind: "error"/);
-  assert.match(detail, /STALE_VERSION/);
-  assert.match(detail, /ALREADY_SIGNED/);
-  const run = detail.slice(detail.indexOf("async function run"), detail.indexOf("const payload"));
-  assert.ok(run.indexOf("okText") < run.indexOf("catch"), "the success text is only set after the work succeeded");
+test("in-person signing screen: success and failure are both shown; a stale, expired or already-signed answer sends the device back to the hand-over; step 3 is addressed to staff", () => {
+  assert.match(signPage, /Report signed and final/);
+  assert.match(signPage, /You can take the device back now/);
+  assert.match(signPage, /Download signed PDF/);
+  assert.match(signPage, /role="alert"/);
+  for (const code of ["STALE_VERSION", "SIGNING_SESSION_INVALID", "ALREADY_SIGNED"]) assert.ok(signPage.includes(code), code);
+  assert.match(signPage, /function backToHandoff/);
+  // the typed name, the drawing and the session belong to one hand-over and are cleared when it ends
+  const back = signPage.slice(signPage.indexOf("function backToHandoff"), signPage.indexOf("async function startSigning"));
+  for (const cleared of ["setSession(null)", 'setSignerName("")', "setSignatureImage(null)", "setConfirm(false)"]) assert.ok(back.includes(cleared), cleared);
+  assert.match(signPage, /Platino staff: cancel this signing/);
+  // a draft or someone without access is told so instead of seeing the form
+  assert.match(signPage, /data-testid="signing-not-ready"/);
+  assert.match(signPage, /data-testid="signing-no-access"/);
+  assert.match(signPage, /canCollectSignature/);
 });
 
-test("staff workflow: edit a draft, save, submit for signature, take back; all driven by the server's permission flags", () => {
-  for (const flag of ["canEdit", "canSubmit", "canReopen", "canSign"]) assert.match(detail, new RegExp(`p\.${flag}|permissions\.${flag}|${flag}:`), flag);
+test("staff workflow: edit a draft, save, submit for signature, then go STRAIGHT to the in-person signing screen; take back; all driven by the server's permission flags", () => {
+  for (const flag of ["canEdit", "canSubmit", "canReopen", "canCollectSignature"]) assert.match(detail, new RegExp(`p\\.${flag}|permissions\\.${flag}|${flag}:`), flag);
   assert.match(detail, /Save draft/);
   assert.match(detail, /Submit for customer signature/);
   assert.match(detail, /Take back to draft to edit/);
   assert.match(detail, /expectedVersion/);
   assert.match(detail, /serviceReportMissingFields\(form\)/, "incomplete reports are caught before the request too");
+  // after a successful submit the same device opens the signing screen
+  assert.match(detail, /const submitted = await run\("submit"/);
+  assert.match(detail, /if \(submitted\) router\.push\(`\/service-reports\/\$\{id\}\/sign`\)/);
+  // an awaiting report offers a way back into the signing screen, and the old on-page signing form is gone
+  assert.match(detail, /Open the customer signing screen/);
+  assert.match(detail, /href=\{`\/service-reports\/\$\{report\.id\}\/sign`\}/);
+  assert.doesNotMatch(detail, /<SignaturePad|Review and sign|canSign\b|signNow|\/sign`,/, "signing no longer happens on the report page");
 });
 
 test("signed state: signature, signer, time, download and open - the files are fetched with the login token", () => {
@@ -75,21 +109,22 @@ test("loading, empty and error states exist on both screens", () => {
   assert.match(list, /Suspense/, "useSearchParams needs a Suspense boundary for the production build");
 });
 
-test("entry points: ticket list (staff), customer portal, and the RECD unit history", () => {
+test("entry points: ticket list (staff) and the RECD unit history - the customer portal no longer links to service reports", () => {
   assert.match(complaints, /\/service-reports\?complaintId=\$\{c\.id\}/);
-  assert.match(portal, /\/service-reports\?complaintId=\$\{c\.id\}/);
+  assert.doesNotMatch(portal, /service-reports|Review & sign|Service reports &amp; signing|my-service-reports/, "no customer-portal service-report links, list or signing instructions");
   assert.match(unitPage, /Download signed PDF/);
   assert.match(unitPage, /serviceReports/);
   assert.match(unitPage, /No service report uploaded/, "the legacy attachment text and download are kept");
   assert.match(unitPage, /download=\{reportFileName\(c\.ticketNumber, c\.serviceReportUrl\)\}/);
 });
 
-test("the staff permission rule for /service-reports never reaches a customer (customers sign there); the API decides access", () => {
-  // Staff list: a route rule exists (menu + guard), but the customer branch of the guard runs and returns BEFORE the permission check.
+test("the staff permission rule for /service-reports never reaches a customer (customers have no report pages at all); the API decides access", () => {
   assert.match(guard, /"\/service-reports": \[\.\.\.SERVICE_REPORT_LIST_PERMISSIONS\]/);
   const customerBranch = guard.indexOf('user.role.key === "customer"');
   const permissionCheck = guard.indexOf("const matched = matchRoute(pathname);");
   assert.ok(customerBranch > 0 && permissionCheck > customerBranch, "customers are handled first");
+  const branch = guard.slice(customerBranch, permissionCheck);
+  assert.doesNotMatch(branch, /service-reports/, "a customer is never sent to, or shown, a service-report page");
 });
 
 // ---------------------------------------------------------------------------------------------------------
@@ -134,11 +169,11 @@ test("a submitted (unsigned) report is never styled or worded as signed", () => 
   assert.match(detail, /report\.status === SERVICE_REPORT_STATUS\.SIGNED && \(/, "the signed block is only for status signed");
 });
 
-test("customer entry point: the portal lists their reports and the sign step stays behind the server's canSign flag", () => {
-  assert.match(portal, /\/service-reports\/mine/);
-  assert.match(portal, /data-testid="my-service-reports"/);
-  assert.match(portal, /Review & sign/);
-  assert.match(detail, /p\.canSign/);
+test("customer portal: no service-report list, no 'Review & sign', no link - and no call to the removed /mine endpoint", () => {
+  assert.doesNotMatch(portal, /\/service-reports/);
+  assert.doesNotMatch(portal, /Review & sign|my-service-reports|myReports/);
+  assert.match(portal, /Submit Complaint/, "the rest of the portal (raising and following complaints) is untouched");
+  assert.match(portal, /Support History/);
 });
 
 test("RECD unit page shows its AMC reports only inside the AMC section (which is hidden from roles without AMC access)", () => {
@@ -146,16 +181,17 @@ test("RECD unit page shows its AMC reports only inside the AMC section (which is
   assert.match(unitPage, /data-testid="unit-amc-reports"/);
 });
 
-test("page guard: a customer is NOT bounced off the report pages (found in the browser walkthrough), but only those pages", () => {
-  const guard = read("apps/admin-web/src/components/AuthGuard.tsx");
-  // the helper (now in lib/routeAccess.ts, shared with its tests) and its use in both the redirect effect and the render branch
-  assert.match(guard, /from "@\/lib\/routeAccess"/);
-  assert.match(guard, /pathname !== "\/customer\/portal" && !isCustomerReportPath\(pathname\)/);
-  assert.match(guard, /isCustomerPortal \|\| isCustomerReportPath\(pathname\)/);
-  // the exact path rule: the report list (the portal's "Service reports & signing" link) or one report id, nothing broader
+test("page guard: a customer gets the portal and nothing else; staff get the signing screen without the application menu", () => {
   const access = read("apps/admin-web/src/lib/routeAccess.ts");
-  assert.match(access, /export function isCustomerReportPath/);
-  assert.ok(guard.includes("service-reports"), "the guard names the report route");
+  assert.match(guard, /from "@\/lib\/routeAccess"/);
+  assert.match(guard, /if \(pathname !== "\/customer\/portal"\) router\.push\("\/customer\/portal"\)/);
+  assert.match(guard, /return isCustomerPortal \? \(/);
+  assert.doesNotMatch(guard, /isCustomerReportPath/);
+  assert.doesNotMatch(access, /isCustomerReportPath/, "the old customer report-page rule is gone");
+  // the signing screen is a full-screen staff page: after the permission check, shown without the menu
+  assert.match(access, /export function isInPersonSigningPath/);
+  assert.match(guard, /if \(isInPersonSigningPath\(pathname\)\) \{\s*return <div className="min-h-screen bg-gray-50">\{children\}<\/div>;/);
+  assert.ok(guard.indexOf("isInPersonSigningPath(pathname)") > guard.indexOf("if (matched && !canAccess(user.permissions, matched))"), "the permission check comes first");
 });
 
 test("customer, site and DG entry points: Customer and Site pages link to their reports, the unit page links each AMC order, and the list filters by them", () => {
@@ -184,7 +220,7 @@ test("Service Reports page: a + New Service Report button (only for staff who ma
   assert.match(allReports, /\+ New Service Report/);
   assert.match(allReports, /data-testid="new-service-report-button"/);
   assert.match(allReports, /hasPermission\("manage_complaints"\)/, "offered only to the staff who may create; the API enforces it again");
-  assert.match(allReports, /!isCustomer && hasPermission/, "never for a customer");
+  assert.doesNotMatch(allReports, /isCustomer|\/service-reports\/mine/, "the list is a staff page: no customer branch");
   assert.match(allReports, /<DirectReportForm onClose/);
   for (const kept of [/data-testid="report-filters"/, /Search service reports/, /aria-label="Status"/, /aria-label="Type"/, /report-scope-filters/, /Clear filters/, /data-testid="reports-paging"/, /REPORT_LIST_PAGE_SIZE/]) assert.match(allReports, kept);
   assert.match(allReports, /directly with \+ New Service Report/);
@@ -225,14 +261,14 @@ test("direct form: validation, the open-ticket suggestion and the open-direct-re
   assert.match(directForm, /apiErrorMessage\(err/, "server refusals (duplicate, mismatch, permission) are shown");
 });
 
-test("direct reports on the screens: labelled apart from ticket and AMC reports, detail page, customer portal and RECD unit history", () => {
+test("direct reports on the screens: labelled apart from ticket and AMC reports, detail page and RECD unit history", () => {
   assert.match(detail, /"direct"/);
   assert.match(detail, /Direct service report/);
   assert.match(detail, /report\.kind === "direct" \? "← All service reports"/);
   assert.match(detail, /"Not recorded"/);
   assert.match(detail, /Submit for customer signature/);
-  assert.match(portal, /r\.kind === "direct" \? "Service visit"/);
-  assert.match(portal, /\/service-reports\/mine/);
+  assert.match(signPage, /report\.kind === "amc" \? \["AMC order"/);
+  assert.match(signPage, /"Direct service report"/);
   assert.match(unitPage, /directServiceReports/);
   assert.match(unitPage, /data-testid="unit-direct-reports"/);
   assert.match(unitPage, /unit-amc-reports-link|unit-amc-report-/, "the AMC and ticket report sections are kept");
@@ -241,10 +277,14 @@ test("direct reports on the screens: labelled apart from ticket and AMC reports,
   assert.match(ui, /"Direct"/);
 });
 
-test("signing a direct report uses the same screen and the same signature pad as every other report (no second signature system)", () => {
+test("signing a direct, ticket or AMC report uses the same in-person screen and the same signature pad (no second signature system)", () => {
   assert.doesNotMatch(directForm, /SignaturePad|signatureImage/);
-  assert.match(detail, /<SignaturePad/);
-  assert.match(detail, /p\.canSign/);
-  assert.match(detail, /I have reviewed this report and approve it/);
-  assert.match(detail, /confirm: true/);
+  assert.equal((signPage.match(/<SignaturePad/g) ?? []).length, 1, "one signature pad, on the signing screen only");
+  for (const f of ["AllServiceReports", "page", "[id]/page"]) {
+    const src = read(`apps/admin-web/src/app/service-reports/${f}.tsx`);
+    assert.doesNotMatch(src, /<SignaturePad/, f);
+  }
+  assert.match(signPage, /I have reviewed this report and approve it/);
+  assert.match(signPage, /confirm: true/);
+  assert.match(signPage, /report\.kind === "amc"/);
 });

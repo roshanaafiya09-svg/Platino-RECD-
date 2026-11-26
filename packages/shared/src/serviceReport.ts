@@ -59,6 +59,8 @@ export const SERVICE_REPORT_LIMITS = {
   SIGNATURE_MAX_BYTES: 150_000,
   SIGNATURE_MIN_DIMENSION: 80,
   SIGNATURE_MAX_DIMENSION: 1600,
+  /** How long the in-person signing screen stays valid after staff hand the device to the customer (see startSigningSessionSchema). */
+  SIGNING_SESSION_MINUTES: 15,
 } as const;
 
 export const SIGNATURE_DATA_URL_PREFIX = "data:image/png;base64,";
@@ -131,6 +133,16 @@ export const updateServiceReportSchema = z.object({
 export const submitServiceReportSchema = z.object({ expectedVersion: z.number().int().positive() });
 export const reopenServiceReportSchema = submitServiceReportSchema;
 
+/**
+ * IN-PERSON SIGNING. After staff submit a report for signature, the same staff device is handed to the customer, who reviews and signs on it.
+ * Before the signing form is shown, staff must confirm that the device is now with the customer; the server then issues a short-lived signing
+ * session bound to THIS report, THIS version and THIS staff login. The signature is accepted only together with that session.
+ */
+export const startSigningSessionSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  handoffConfirmed: z.literal(true, { error: "Confirm that the device is now with the customer" }),
+});
+
 /** Longest base64 text a signature of SIGNATURE_MAX_BYTES can have (plus the data-URL prefix). */
 const SIGNATURE_MAX_CHARS = SIGNATURE_DATA_URL_PREFIX.length + Math.ceil((SERVICE_REPORT_LIMITS.SIGNATURE_MAX_BYTES * 4) / 3) + 4;
 
@@ -146,6 +158,8 @@ export const signServiceReportSchema = z.object({
     .startsWith(SIGNATURE_DATA_URL_PREFIX, "The signature must be a PNG image"),
   /** The version of the report the customer reviewed. Signing a different (edited) version is refused. */
   version: z.number().int().positive(),
+  /** The signing session issued when staff handed the device to the customer (POST /service-reports/:id/signing-session). */
+  signingSession: z.string().min(20, "Start the in-person signing first").max(2000),
   /** The customer ticked "I have reviewed this report and approve it". */
   confirm: z.literal(true, { error: "Confirm that you have reviewed the report" }),
 });

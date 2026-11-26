@@ -2,12 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { SERVICE_REPORT_LIMITS, SERVICE_REPORT_STATUS, SERVICE_REPORT_STATUS_LABELS, serviceReportMissingFields, type ServiceReportStatus } from "@recd/shared";
 import { api, apiBlob, ApiRequestError } from "@/lib/apiClient";
 import { apiErrorMessage } from "@/lib/apiError";
-import { useAuth } from "@/components/AuthContext";
-import SignaturePad from "@/components/SignaturePad";
 import { downloadReportPdf, openReportPdf } from "@/lib/reportFiles";
 import { reportStatusPill } from "@/lib/serviceReportUi";
 
@@ -36,7 +34,7 @@ interface ReportDetail {
   customerName: string | null;
   site: { name: string | null; address: string | null; dgModel: string | null; dgCapacityKva: string | number | null } | null;
   unit: { serialNo: string | null; model: string | null } | null;
-  permissions: { canEdit: boolean; canSubmit: boolean; canReopen: boolean; canSign: boolean };
+  permissions: { canEdit: boolean; canSubmit: boolean; canReopen: boolean; canCollectSignature: boolean };
 }
 
 const SECTIONS = [
@@ -47,15 +45,12 @@ const SECTIONS = [
 
 export default function ServiceReportPage() {
   const { id } = useParams<{ id: string }>();
-  const { user } = useAuth();
+  const router = useRouter();
   const [report, setReport] = useState<ReportDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState({ visitDate: "", workPerformed: "", findings: "", resolution: "", partsUsed: "", remarks: "" });
-  const [busy, setBusy] = useState<null | "save" | "submit" | "reopen" | "sign" | "download">(null);
+  const [busy, setBusy] = useState<null | "save" | "submit" | "reopen" | "download">(null);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
-  const [signatureImage, setSignatureImage] = useState<string | null>(null);
-  const [signerName, setSignerName] = useState("");
-  const [confirm, setConfirm] = useState(false);
   const [signatureUrl, setSignatureUrl] = useState<string | null>(null);
 
   const sync = useCallback((r: ReportDetail) => {
@@ -71,9 +66,6 @@ export default function ServiceReportPage() {
   }, [id, sync]);
 
   useEffect(load, [load]);
-  useEffect(() => {
-    if (user?.name && !signerName) setSignerName(user.name);
-  }, [user, signerName]);
 
   // The saved signature image is a protected file: fetch it with the login token and show it from a blob URL.
   useEffect(() => {
@@ -125,12 +117,15 @@ export default function ServiceReportPage() {
   async function submit() {
     const missing = serviceReportMissingFields(form);
     if (missing.length) return setMessage({ kind: "error", text: `Complete these before submitting: ${missing.join(", ")}.` });
-    await run("submit", async () => {
+    const submitted = await run("submit", async () => {
       await api(`/service-reports/${id}`, { method: "PATCH", body: JSON.stringify(payload()) });
       const fresh = await api<ReportDetail>(`/service-reports/${id}`);
       await api(`/service-reports/${id}/submit`, { method: "POST", body: JSON.stringify({ expectedVersion: fresh.version }) });
       sync(await api<ReportDetail>(`/service-reports/${id}`));
-    }, "Submitted. The customer can now review and sign this report.");
+      return true as const;
+    });
+    // The customer signs in person on THIS device: go straight to the signing screen (it starts with the hand-over step).
+    if (submitted) router.push(`/service-reports/${id}/sign`);
   }
 
   const reopen = () =>
@@ -138,15 +133,6 @@ export default function ServiceReportPage() {
       await api(`/service-reports/${id}/reopen`, { method: "POST", body: JSON.stringify({ expectedVersion: report!.version }) });
       sync(await api<ReportDetail>(`/service-reports/${id}`));
     }, "Taken back to draft. The customer can no longer sign the earlier version.");
-
-  const signNow = () =>
-    run("sign", async () => {
-      await api(`/service-reports/${id}/sign`, {
-        method: "POST",
-        body: JSON.stringify({ signerName, signatureImage, version: report!.version, confirm: true }),
-      });
-      sync(await api<ReportDetail>(`/service-reports/${id}`));
-    }, "Thank you - the report is signed and final. You can download the signed PDF below.");
 
   async function download(open: boolean) {
     setMessage(null);
@@ -173,7 +159,6 @@ export default function ServiceReportPage() {
 
   const p = report.permissions;
   const editable = p.canEdit;
-  const canFinishSigning = !!signatureImage && signerName.trim().length >= SERVICE_REPORT_LIMITS.SIGNER_NAME_MIN && confirm && busy === null;
 
   return (
     <div className="space-y-6 max-w-3xl" data-testid="service-report-detail">
@@ -276,36 +261,27 @@ export default function ServiceReportPage() {
           </button>
         </div>
       )}
-      {p.canReopen && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 space-y-2">
-          <p>Submitted on {report.submittedAt ? new Date(report.submittedAt).toLocaleString() : "-"}. Waiting for the customer to review and sign.</p>
-          <button onClick={reopen} disabled={busy !== null} className="font-medium underline disabled:opacity-50">
-            {busy === "reopen" ? "Working…" : "Take back to draft to edit"}
-          </button>
+      {/* Awaiting the customer's signature: collected IN PERSON on this staff device (no customer login is involved) */}
+      {report.status === SERVICE_REPORT_STATUS.AWAITING_SIGNATURE && p.canCollectSignature && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 space-y-3" data-testid="awaiting-signature">
+          <p>
+            Submitted on {report.submittedAt ? new Date(report.submittedAt).toLocaleString() : "-"}. Waiting for the customer to review and sign{" "}
+            <strong>in person, on this device</strong>.
+          </p>
+          <div className="flex flex-wrap items-center gap-4">
+            <Link href={`/service-reports/${report.id}/sign`} className="btn-primary px-4 py-2 text-sm" data-testid="open-signing-screen">
+              Open the customer signing screen
+            </Link>
+            {p.canReopen && (
+              <button onClick={reopen} disabled={busy !== null} className="font-medium underline disabled:opacity-50">
+                {busy === "reopen" ? "Working…" : "Take back to draft to edit"}
+              </button>
+            )}
+          </div>
         </div>
       )}
-
-      {/* Customer signing */}
-      {p.canSign && (
-        <section className="space-y-3 rounded-xl border border-gray-200 bg-white p-4" data-testid="sign-section">
-          <h2 className="text-base font-semibold">Review and sign</h2>
-          <p className="text-sm text-gray-600">Please read the report above. By signing you confirm that the work and findings described are correct. A signed report is final and cannot be changed.</p>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Your full name</label>
-            <input className="field w-full" maxLength={SERVICE_REPORT_LIMITS.SIGNER_NAME_MAX} value={signerName} onChange={(e) => setSignerName(e.target.value)} />
-          </div>
-          <SignaturePad onChange={setSignatureImage} disabled={busy === "sign"} />
-          <label className="flex items-start gap-2 text-sm text-gray-700">
-            <input type="checkbox" className="mt-1" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} />
-            <span>I have reviewed this report and approve it.</span>
-          </label>
-          <button onClick={signNow} disabled={!canFinishSigning} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
-            {busy === "sign" ? "Signing…" : "Sign and finalise"}
-          </button>
-        </section>
-      )}
-      {report.status === SERVICE_REPORT_STATUS.AWAITING_SIGNATURE && !p.canSign && !p.canReopen && (
-        <p className="text-sm text-gray-500">This report is waiting for the customer&apos;s signature.</p>
+      {report.status === SERVICE_REPORT_STATUS.AWAITING_SIGNATURE && !p.canCollectSignature && (
+        <p className="text-sm text-gray-500">This report is waiting for the customer&apos;s signature, which Platino staff collect in person on a staff device.</p>
       )}
 
       {/* Submitted and final, but NOT signed (AMC, acknowledgement not required) */}

@@ -33,15 +33,13 @@ interface Row {
 
 /**
  * All service reports the signed-in user may see. Staff: the scoped list from GET /service-reports (their role and region / vendor / assignment
- * decide the rows, on the server), with status, kind and free-text filters. A customer: their own reports that have left draft (GET /mine).
+ * decide the rows, on the server), with status, kind and free-text filters. Customers no longer have this page (they sign in person on a staff device).
  * Nothing here widens access - the API authorises every row.
  */
 export default function AllServiceReports() {
-  const { user } = useAuth();
-  const isCustomer = user?.role.key === "customer";
+  const { user, hasPermission } = useAuth();
   // The server decides who may create (manage_complaints holders within their scope); the button is only offered to them.
-  const { hasPermission } = useAuth();
-  const canCreateDirect = !isCustomer && hasPermission("manage_complaints");
+  const canCreateDirect = hasPermission("manage_complaints");
   const [showNew, setShowNew] = useState(false);
   // A Customer, Site or DG (RECD unit) page links here with ?customerId= / ?siteId= / ?unitId=; the API still limits the rows to what the user may see.
   const params = useSearchParams();
@@ -60,10 +58,7 @@ export default function AllServiceReports() {
   const load = useCallback(() => {
     if (!user) return;
     setError(null);
-    const request = isCustomer
-      ? api<{ reports: Row[] }>("/service-reports/mine").then((r) => ({ reports: r.reports, total: r.reports.length }))
-      : api<{ reports: Row[]; total: number }>(`/service-reports?${reportListQuery(filters)}`);
-    request
+    api<{ reports: Row[]; total: number }>(`/service-reports?${reportListQuery(filters)}`)
       .then((r) => {
         setRows(r.reports);
         setTotal(r.total);
@@ -73,7 +68,7 @@ export default function AllServiceReports() {
         setTotal(0);
         setError(apiErrorMessage(err, "Could not load the service reports."));
       });
-  }, [user, isCustomer, filters]);
+  }, [user, filters]);
   useEffect(load, [load]);
 
   async function download(r: Row) {
@@ -93,9 +88,7 @@ export default function AllServiceReports() {
       <div>
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Service reports</h1>
         <p className="mt-1 text-sm text-gray-500">
-          {isCustomer
-            ? "Your service reports. Open one to review it and, where asked, sign it."
-            : "Service reports you are allowed to see. Create one directly with + New Service Report (choose the customer and the DG), or start it from an existing service ticket (Complaints → Service reports) or AMC order (AMC Order → Service reports). Every report is signed by the customer."}
+          Service reports you are allowed to see. Create one directly with + New Service Report (choose the customer and the DG), or start it from an existing service ticket (Complaints → Service reports) or AMC order (AMC Order → Service reports). Every report is signed by the customer in person, on the device you hand over after you submit it.
         </p>
       </div>
       {canCreateDirect && (
@@ -107,7 +100,6 @@ export default function AllServiceReports() {
 
       {canCreateDirect && showNew && <DirectReportForm onClose={() => setShowNew(false)} />}
 
-      {!isCustomer && (
         <form
           className="flex flex-wrap items-end gap-2 rounded-xl border border-gray-200 bg-white p-3"
           data-testid="report-filters"
@@ -158,7 +150,6 @@ export default function AllServiceReports() {
             </button>
           )}
         </form>
-      )}
 
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       {downloadError && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{downloadError}</p>}
@@ -176,7 +167,7 @@ export default function AllServiceReports() {
               <tr>
                 <th className="px-3 py-2">Report</th>
                 <th className="px-3 py-2">For</th>
-                {!isCustomer && <th className="px-3 py-2">Customer / site</th>}
+                <th className="px-3 py-2">Customer / site</th>
                 <th className="px-3 py-2">RECD serial</th>
                 <th className="px-3 py-2">Visit</th>
                 <th className="px-3 py-2">Status</th>
@@ -193,12 +184,10 @@ export default function AllServiceReports() {
                     <span className={reportKindPill(r.kind)} data-testid={`report-kind-${r.reportNumber}`}>{reportKindLabel(r.kind)}</span>
                     <div className="mt-0.5 text-xs text-gray-500">{reportSource(r)}</div>
                   </td>
-                  {!isCustomer && (
                     <td className="px-3 py-2">
                       <div>{r.customerName ?? "-"}</div>
                       <div className="text-xs text-gray-500">{r.siteName ?? "No site"}</div>
                     </td>
-                  )}
                   <td className="px-3 py-2 font-mono text-xs">{r.unitSerial ?? r.unitSerialNo ?? (r.kind === "direct" ? "Not recorded" : "Serial not entered")}</td>
                   <td className="px-3 py-2 whitespace-nowrap">{r.visitDate}<div className="text-xs text-gray-500">{r.engineer.name}</div></td>
                   <td className="px-3 py-2"><span className={reportStatusPill(r.status)}>{SERVICE_REPORT_STATUS_LABELS[r.status] ?? r.status}</span></td>
@@ -217,7 +206,7 @@ export default function AllServiceReports() {
         </div>
       )}
 
-      {!isCustomer && rows && total > 0 && (
+      {rows && total > 0 && (
         <div className="flex items-center justify-between text-xs text-gray-500" data-testid="reports-paging">
           <span>{pageRange(filters.offset, rows.length, total)}</span>
           <span className="flex gap-3">

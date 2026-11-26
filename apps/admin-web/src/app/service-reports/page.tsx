@@ -147,8 +147,8 @@ function ReportsForTicketOrAmc() {
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>{title}</h1>
         <p className="mt-1 text-sm text-gray-500">
           {isAmc
-            ? "One report per AMC visit to one RECD unit. The report is written by Platino staff, reviewed and signed by the customer, then kept as a signed PDF."
-            : "A digital report is written by the service engineer, reviewed and signed by the customer, then kept as a signed PDF."}
+            ? "One report per AMC visit to one RECD unit. The report is written by Platino staff, then reviewed and signed by the customer in person on the staff device, and kept as a signed PDF."
+            : "A digital report is written by the service engineer, then reviewed and signed by the customer in person on the staff device, and kept as a signed PDF."}
         </p>
       </div>
 
@@ -236,7 +236,7 @@ function ReportsForTicketOrAmc() {
                 </button>
               )}
               <Link href={`/service-reports/${r.id}`} className="text-xs font-medium text-gray-600 hover:underline">
-                {r.status === SERVICE_REPORT_STATUS.AWAITING_SIGNATURE && !canWrite ? "Review & sign" : "Open"}
+                Open
               </Link>
             </div>
           </li>

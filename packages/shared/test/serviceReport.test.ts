@@ -13,6 +13,7 @@ import {
   createServiceReportSchema,
   serviceReportMissingFields,
   signServiceReportSchema,
+  startSigningSessionSchema,
   updateServiceReportSchema,
 } from "../src/index";
 
@@ -61,8 +62,8 @@ test("submit check lists exactly the sections still missing", () => {
   assert.deepEqual(serviceReportMissingFields({ workPerformed: "did work", findings: "found a leak", resolution: "sealed it" }), ["Visit date"]);
 });
 
-test("sign payload: name, PNG data URL, version and an explicit confirmation are all required", () => {
-  const good = { signerName: "Asha Rao", signatureImage: `${SIGNATURE_DATA_URL_PREFIX}AAAA`, version: 1, confirm: true };
+test("sign payload: name, PNG data URL, version, signing session and an explicit confirmation are all required", () => {
+  const good = { signerName: "Asha Rao", signatureImage: `${SIGNATURE_DATA_URL_PREFIX}AAAA`, version: 1, confirm: true, signingSession: "s".repeat(40) };
   assert.equal(signServiceReportSchema.safeParse(good).success, true);
   assert.equal(signServiceReportSchema.parse({ ...good, signerName: "  Asha Rao " }).signerName, "Asha Rao");
   const bad: Array<Record<string, unknown>> = [
@@ -70,8 +71,18 @@ test("sign payload: name, PNG data URL, version and an explicit confirmation are
     { signatureImage: undefined }, { signatureImage: "Asha Rao" }, { signatureImage: "data:image/jpeg;base64,AAAA" },
     { signatureImage: SIGNATURE_DATA_URL_PREFIX + "A".repeat(Math.ceil(SERVICE_REPORT_LIMITS.SIGNATURE_MAX_BYTES * 1.4)) },
     { version: undefined }, { version: 0 }, { version: 1.5 }, { confirm: false }, { confirm: undefined }, { confirm: "true" },
+    { signingSession: undefined }, { signingSession: "short" }, { signingSession: "s".repeat(2001) },
   ];
   for (const over of bad) assert.equal(signServiceReportSchema.safeParse({ ...good, ...over }).success, false, JSON.stringify(over).slice(0, 80));
+});
+
+test("hand-over payload: the version shown and an explicit confirmation that the device is with the customer are required", () => {
+  const good = { expectedVersion: 2, handoffConfirmed: true };
+  assert.equal(startSigningSessionSchema.safeParse(good).success, true);
+  for (const over of [{ handoffConfirmed: false }, { handoffConfirmed: undefined }, { handoffConfirmed: "true" }, { expectedVersion: undefined }, { expectedVersion: 0 }, { expectedVersion: 1.5 }]) {
+    assert.equal(startSigningSessionSchema.safeParse({ ...good, ...over }).success, false, JSON.stringify(over));
+  }
+  assert.ok(SERVICE_REPORT_LIMITS.SIGNING_SESSION_MINUTES > 0 && SERVICE_REPORT_LIMITS.SIGNING_SESSION_MINUTES <= 60, "a short window");
 });
 
 test("'submitted' (older unsigned AMC reports) is final and can no longer be reached: every report must be signed", () => {

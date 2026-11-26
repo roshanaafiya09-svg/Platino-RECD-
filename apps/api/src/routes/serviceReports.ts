@@ -17,6 +17,7 @@ import {
   reopenServiceReportSchema,
   serviceReportMissingFields,
   signServiceReportSchema,
+  startSigningSessionSchema,
   submitServiceReportSchema,
   updateServiceReportSchema,
 } from "@recd/shared";
@@ -28,6 +29,7 @@ import { logComplaintEvent } from "../lib/ticketEvents";
 import { checkSignatureDataUrl } from "../lib/signatureImage";
 import { buildServiceReportPdf, type ServiceReportPdfInput } from "../lib/serviceReportPdf";
 import { getReportStorage, sha256Hex, type ReportStorage } from "../lib/reportStorage";
+import { checkSigningSession, issueSigningSession } from "../lib/signingSession";
 
 /**
  * Digital service reports. Three kinds share ONE table, one state machine, one signature check, one PDF builder and one
@@ -53,8 +55,12 @@ import { getReportStorage, sha256Hex, type ReportStorage } from "../lib/reportSt
  *  DIRECT reports - write: MANAGE_COMPLAINTS holders (management, service team, service managers, regional managers) for units at sites in their
  *    vendor / region scope. Read: those, VIEW_COMPLAINTS_OVERVIEW holders, and a field engineer for a unit on which a ticket is assigned to them
  *    (read only: engineers create reports through their assigned tickets, because a direct report has no assignment to set their scope).
- *  Customers (all kinds) - read reports of their OWN customer once they have left draft; sign only reports awaiting
- *    signature. The signer is the logged-in customer contact; the typed name and drawn image are recorded evidence.
+ *  SIGNING is IN PERSON, on the staff device: after submitting, staff hand the device to the customer, who reviews the report, types their own name,
+ *    draws their own signature and approves. A customer LOGIN can no longer sign (and there is no customer list of reports any more); the signature
+ *    is accepted only from the staff session that handed the device over (POST /:id/signing-session), within a short window, for the report version
+ *    shown. The signer is recorded by the NAME THE CUSTOMER TYPED (signedById stays empty: no account is invented and the staff account is not
+ *    the signer); the staff account is recorded as the one that captured it, in the audit trail and on the PDF.
+ *  Customers (all kinds) - may still READ the reports of their OWN customer once they have left draft (API only; no screen offers it any more).
  *  customerId / siteId / unitId / serial are never read from a request body: tickets give them for ticket reports; the AMC
  *  order and the covered unit give them for AMC reports.
  */
@@ -64,6 +70,7 @@ serviceReportsRouter.use(authenticate);
 const MAX_NUMBER_ATTEMPTS = 3;
 const NOT_FOUND = { error: "Service report not found" };
 const EVENT_UPDATED = "service_report_updated";
+const EVENT_SIGNING_STARTED = "service_report_signing_started";
 const amcRef = (amcOrderId: string) => `AMC-${amcOrderId.slice(-6).toUpperCase()}`;
 
 // ---------------------------------------------------------------------------
@@ -256,7 +263,7 @@ async function event(req: AuthenticatedRequest, r: ReportRow, type: string, toVa
   } catch (err) {
     console.error("Failed to log service report event", err instanceof Error ? err.name : "unknown");
   }
-  if (r.complaintId && type !== EVENT_UPDATED) {
+  if (r.complaintId && type !== EVENT_UPDATED && type !== EVENT_SIGNING_STARTED) {
     await logComplaintEvent({ complaintId: r.complaintId, type: type as never, fromValue: fromValue ?? null, toValue, actorId: req.auth!.userId, detail });
   }
 }
@@ -506,19 +513,6 @@ serviceReportsRouter.get("/direct-options", async (req: AuthenticatedRequest, re
   });
 });
 
-/** A customer's own reports (tickets and AMC) that have left draft - the customer-facing entry point. */
-serviceReportsRouter.get("/mine", async (req: AuthenticatedRequest, res) => {
-  const customerId = req.auth!.customerId;
-  if (!customerId) return res.status(403).json({ error: "Forbidden" });
-  const reports = await prisma.serviceReport.findMany({
-    where: { customerId, status: { not: SERVICE_REPORT_STATUS.DRAFT } },
-    include: { ...reportInclude, unit: { select: { serialNo: true } } },
-    orderBy: { createdAt: "desc" },
-  });
-  // unitSerial: an AMC report prints its own snapshot; a ticket report has none, so the unit's current serial is shown (the customer's own unit).
-  res.json({ reports: reports.map((r) => ({ ...toApi(r as unknown as ReportRow), unitSerial: r.unitSerialNo ?? r.unit?.serialNo ?? null })) });
-});
-
 serviceReportsRouter.get("/:id", async (req: AuthenticatedRequest, res) => {
   const found = await loadWithAccess(req, res, asString(req.params.id));
   if (!found) return;
@@ -542,7 +536,8 @@ serviceReportsRouter.get("/:id", async (req: AuthenticatedRequest, res) => {
       canEdit: found.staff.write && open,
       canSubmit: found.staff.write && open,
       canReopen: found.staff.write && report.status === SERVICE_REPORT_STATUS.AWAITING_SIGNATURE,
-      canSign: isOwnCustomer(req, report.customerId) && report.status === SERVICE_REPORT_STATUS.AWAITING_SIGNATURE,
+      // In-person signing: staff with write access open the signing screen for a report that is awaiting signature. A customer login never signs.
+      canCollectSignature: found.staff.write && report.status === SERVICE_REPORT_STATUS.AWAITING_SIGNATURE,
     },
   });
 });
@@ -893,29 +888,85 @@ serviceReportsRouter.post("/:id/reopen", async (req: AuthenticatedRequest, res) 
 });
 
 // ---------------------------------------------------------------------------
-// Sign (customer)
+// Sign (in person, on the staff device)
 // ---------------------------------------------------------------------------
 
+const SIGNER_IS_STAFF = "The person signing must be the customer's representative. Enter the customer's own name, not a Platino staff member's.";
+const normName = (v: string | null | undefined) => (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+const SESSION_MESSAGES: Record<string, string> = {
+  malformed: "Start the in-person signing first: hand the device to the customer from the signing screen.",
+  forged: "Start the in-person signing first: hand the device to the customer from the signing screen.",
+  expired: "The signing session has expired. Return to the report and start the in-person signing again.",
+  other_report: "This signing session belongs to another report. Return to the report and start the in-person signing again.",
+  other_version: "This report changed after the signing was started. Return to the report and start the in-person signing again.",
+  other_user: "This signing session was started by another user. Return to the report and start the in-person signing again.",
+};
+
+/**
+ * Step 1 of in-person signing: staff confirm that the device is now with the customer. Only staff who may write to this report, and only for a report
+ * that is awaiting signature and whose content is exactly what was submitted, get a session. Nothing is signed here; it is recorded in the audit trail.
+ */
+serviceReportsRouter.post("/:id/signing-session", async (req: AuthenticatedRequest, res) => {
+  const parsed = startSigningSessionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const found = await loadWithAccess(req, res, asString(req.params.id));
+  if (!found) return;
+  const { report } = found;
+  if (!found.staff.write) return res.status(403).json({ error: "You cannot start the signing of this report" });
+  if (report.status !== SERVICE_REPORT_STATUS.AWAITING_SIGNATURE) {
+    return res.status(409).json({ error: "Only a report that is awaiting the customer's signature can be signed.", code: "BAD_TRANSITION" });
+  }
+  if (parsed.data.expectedVersion !== report.version) return staleVersion(res);
+  if (serviceReportMissingFields(report).length || !report.contentHash || report.contentHash !== reportContentHash(report)) {
+    return res.status(409).json({ error: "This report is not in a signable state. Take it back to draft and submit it again.", code: "REPORT_NOT_SIGNABLE" });
+  }
+  const session = issueSigningSession({ reportId: report.id, version: report.version, staffId: req.auth!.userId });
+  await event(req, report, EVENT_SIGNING_STARTED, SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, { mode: "in_person", handoffConfirmed: true, expiresAt: session.expiresAt.toISOString() });
+  res.json({ signingSession: session.token, expiresAt: session.expiresAt.toISOString(), version: report.version });
+});
+
+/**
+ * Step 2: the customer's signature, captured on the staff device. Needs the staff login that started the session (a customer login is refused),
+ * the signing session, the version that was shown, the name the customer typed, the drawn signature and the approval tick. The signature checks,
+ * the content-hash check, the PDF, the stored files and the final immutability are exactly those of the earlier flow.
+ */
 serviceReportsRouter.post("/:id/sign", async (req: AuthenticatedRequest, res) => {
-  // Only a logged-in customer contact may sign - checked before anything about the report is revealed.
-  if (!req.auth!.customerId) return res.status(403).json({ error: "Only the customer can sign a service report" });
+  // A customer login cannot sign any more - checked before anything about the report is revealed.
+  if (req.auth!.customerId) {
+    return res.status(403).json({ error: "Service reports are signed in person, on a Platino staff device. Please ask the Platino engineer to open the signing screen.", code: "IN_PERSON_ONLY" });
+  }
 
   const parsed = signServiceReportSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const report = await prisma.serviceReport.findUnique({ where: { id: asString(req.params.id) }, include: reportInclude });
-  if (!report || report.customerId !== req.auth!.customerId || report.status === SERVICE_REPORT_STATUS.DRAFT) return res.status(404).json(NOT_FOUND);
+  const found = await loadWithAccess(req, res, asString(req.params.id));
+  if (!found) return;
+  const { report } = found;
+  if (!found.staff.write) return res.status(403).json({ error: "You cannot collect the signature for this report" });
   if (report.status === SERVICE_REPORT_STATUS.SIGNED) return res.status(409).json({ error: "This report has already been signed.", code: "ALREADY_SIGNED" });
+  if (report.status === SERVICE_REPORT_STATUS.DRAFT) return res.status(409).json({ error: "This report has not been submitted for the customer's signature.", code: "BAD_TRANSITION" });
   if (!canTransitionServiceReport(report.status, SERVICE_REPORT_STATUS.SIGNED) || !report.acknowledgementRequired) {
     return res.status(409).json({ error: "This report does not need a signature or cannot be signed.", code: "BAD_TRANSITION" });
   }
   if (parsed.data.version !== report.version) {
-    return res.status(409).json({ error: "This report changed after you opened it. Please review the latest version before signing.", code: "STALE_VERSION" });
+    return res.status(409).json({ error: "This report changed after it was shown to the customer. Please show the latest version before signing.", code: "STALE_VERSION" });
   }
+  // The signing session must be the one this staff login started, for this report and this version, and still fresh.
+  const session = checkSigningSession(parsed.data.signingSession, { reportId: report.id, version: report.version, staffId: req.auth!.userId });
+  if (!session.ok) return res.status(403).json({ error: SESSION_MESSAGES[session.reason] ?? SESSION_MESSAGES.malformed, code: "SIGNING_SESSION_INVALID" });
+
+  // The signer is the customer's representative: never the logged-in member of staff and never the engineer who wrote the report.
+  const staffUser = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { name: true } });
+  const signer = normName(parsed.data.signerName);
+  if ((staffUser?.name && signer === normName(staffUser.name)) || signer === normName(report.createdBy?.name)) {
+    return res.status(400).json({ error: SIGNER_IS_STAFF, code: "SIGNER_IS_STAFF" });
+  }
+
   // The content must still be exactly what was submitted for signature.
   const missing = serviceReportMissingFields(report);
   if (missing.length || !report.contentHash || report.contentHash !== reportContentHash(report)) {
-    return res.status(409).json({ error: "This report is not in a signable state. Please contact Platino service.", code: "REPORT_NOT_SIGNABLE" });
+    return res.status(409).json({ error: "This report is not in a signable state. Please take it back to draft and submit it again.", code: "REPORT_NOT_SIGNABLE" });
   }
 
   const signature = checkSignatureDataUrl(parsed.data.signatureImage);
@@ -934,6 +985,7 @@ serviceReportsRouter.post("/:id/sign", async (req: AuthenticatedRequest, res) =>
       signedAt,
       contentHash: report.contentHash,
       signaturePng: signature.bytes,
+      capturedByName: staffUser?.name ?? "Platino staff",
     });
   } catch (err) {
     console.error("[service-report] PDF generation failed", err instanceof Error ? err.name : "unknown");
@@ -965,7 +1017,9 @@ serviceReportsRouter.post("/:id/sign", async (req: AuthenticatedRequest, res) =>
         signedAt,
         signedVersion: report.version,
         signerName: parsed.data.signerName,
-        signedById: req.auth!.userId,
+        // signedById is deliberately left empty: the signer is the customer representative named above (no account), and the staff account that
+        // operated the device is recorded in the audit event and on the PDF as the one that captured the signature.
+        signedById: null,
         signatureFileId: signatureRef,
         pdfFileId: pdfRef,
         pdfSha256,
@@ -983,7 +1037,13 @@ serviceReportsRouter.post("/:id/sign", async (req: AuthenticatedRequest, res) =>
   }
 
   const fresh = await prisma.serviceReport.findUniqueOrThrow({ where: { id: report.id }, include: reportInclude });
-  await event(req, fresh, COMPLAINT_EVENT.SERVICE_REPORT_SIGNED, SERVICE_REPORT_STATUS.SIGNED, SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, { finalPdfGenerated: true, pdfSha256, signerName: parsed.data.signerName });
+  await event(req, fresh, COMPLAINT_EVENT.SERVICE_REPORT_SIGNED, SERVICE_REPORT_STATUS.SIGNED, SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, {
+    finalPdfGenerated: true,
+    pdfSha256,
+    signerName: parsed.data.signerName,
+    mode: "in_person",
+    capturedById: req.auth!.userId,
+  });
   res.json(toApi(fresh));
 });
 

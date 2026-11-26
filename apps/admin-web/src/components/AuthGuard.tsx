@@ -8,7 +8,7 @@ import BottomNav from "./BottomNav";
 import AgentChatBubble from "./AgentChatBubble";
 import AmcExpiryNotice from "./AmcExpiryNotice";
 import WarrantyExpiryNotice from "./WarrantyExpiryNotice";
-import { isCustomerReportPath, SERVICE_REPORT_LIST_PERMISSIONS } from "@/lib/routeAccess";
+import { isInPersonSigningPath, SERVICE_REPORT_LIST_PERMISSIONS } from "@/lib/routeAccess";
 
 /** Standalone pages that need no sign-in (no sidebar, no auth redirects). */
 const PUBLIC_PATHS = ["/vendor/register", "/report-issue"];
@@ -112,7 +112,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     }
 
     if (user.role.key === "customer") {
-      if (pathname !== "/customer/portal" && !isCustomerReportPath(pathname)) router.push("/customer/portal");
+      if (pathname !== "/customer/portal") router.push("/customer/portal");
       return;
     }
 
@@ -167,7 +167,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (user.role.key === "customer") {
-    return isCustomerPortal || isCustomerReportPath(pathname) ? (
+    return isCustomerPortal ? (
       <div className="min-h-screen bg-gray-50">
         {children}
         <AgentChatBubble />
@@ -196,6 +196,11 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const matched = matchRoute(pathname);
   if (matched && !canAccess(user.permissions, matched)) {
     return null;
+  }
+
+  // The in-person signing screen: a full-screen page without the menu, because a customer is holding the device.
+  if (isInPersonSigningPath(pathname)) {
+    return <div className="min-h-screen bg-gray-50">{children}</div>;
   }
 
   return (

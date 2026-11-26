@@ -239,11 +239,25 @@ async function awaiting(unitId = "uA1", amcOrderId = AMC1) {
   return s.body;
 }
 const goodSignature = () => pngDataUrl(makePng());
-const sign = (as: string, r: any, over: Record<string, unknown> = {}) =>
-  call(as, "POST", `/service-reports/${r.id}/sign`, { signerName: "Asha Rao", signatureImage: goodSignature(), version: r.version, confirm: true, ...over });
+const signBody = (r: any, over: Record<string, unknown> = {}) => ({ signerName: "Asha Rao", signatureImage: goodSignature(), version: r.version, confirm: true, ...over });
+const startSession = (as: string, r: any, over: Record<string, unknown> = {}) =>
+  call(as, "POST", `/service-reports/${r.id}/signing-session`, { expectedVersion: r.version, handoffConfirmed: true, ...over });
+/**
+ * IN-PERSON signing: the staff member `as` hands the device over (the signing session), then the customer's typed name and drawn signature are submitted
+ * from that same device. If the hand-over itself is refused, that answer is returned. Pass `signingSession` in `over` to use a given one.
+ */
+async function sign(as: string, r: any, over: Record<string, unknown> = {}) {
+  let signingSession: unknown = over.signingSession;
+  if (!("signingSession" in over)) {
+    const started = await startSession(as, r);
+    if (started.status !== 200) return started;
+    signingSession = started.body.signingSession;
+  }
+  return call(as, "POST", `/service-reports/${r.id}/sign`, signBody(r, { ...over, signingSession }));
+}
 async function signed(unitId = "uA1", amcOrderId = AMC1) {
   const r = await awaiting(unitId, amcOrderId);
-  const s = await sign("custA", r);
+  const s = await sign("mgmt", r);
   assert.equal(s.status, 200, JSON.stringify(s.body));
   return s.body;
 }
@@ -454,14 +468,14 @@ test("acknowledgement REQUIRED: submit waits for the customer; reopening bumps t
 // Signing
 // =============================================================================================
 
-test("AMC sign: the customer contact signs - signer, time, version, user and files are recorded; the PDF carries AMC details and the signature", async () => {
+test("AMC sign: the customer signs in person on the staff device - signer, time, version and files are recorded; the PDF carries AMC details, the signature and who operated the device", async () => {
   reset();
   const r = await awaiting();
-  const s = await sign("custA", r, { signerName: "  Asha Rao  " });
+  const s = await sign("mgmt", r, { signerName: "  Asha Rao  " });
   assert.equal(s.status, 200, JSON.stringify(s.body));
   assert.deepEqual([s.body.status, s.body.signerName, s.body.signedVersion, s.body.pdfAvailable], ["signed", "Asha Rao", 1, true]);
   const row = rowOf(r.id);
-  assert.equal(row.signedById, "custA");
+  assert.equal(row.signedById, null, "no account is invented: the signer is the typed name, not the staff member");
   assert.ok(row.signedAt && row.signatureFileId && row.pdfFileId && row.pdfSha256);
   assert.equal(files.size, 2);
   assert.equal(sha256Hex(files.get(row.pdfFileId)!.bytes), row.pdfSha256);
@@ -472,14 +486,16 @@ test("AMC sign: the customer contact signs - signer, time, version, user and fil
   }
   assert.ok((files.get(row.pdfFileId)!.bytes.toString("latin1").match(/\/Subtype\s*\/Image/g) ?? []).length >= 1, "signature image in the PDF");
   const last = reportEvents[reportEvents.length - 1];
-  assert.deepEqual([last.type, last.actorId, last.detail.finalPdfGenerated, last.detail.signerName], ["service_report_signed", "custA", true, "Asha Rao"]);
+  assert.deepEqual([last.type, last.actorId, last.detail.finalPdfGenerated, last.detail.signerName], ["service_report_signed", "mgmt", true, "Asha Rao"]);
+  assert.deepEqual([last.detail.mode, last.detail.capturedById], ["in_person", "mgmt"]);
+  assert.ok(text.includes("Signed in person on the device of: Mia Manager"), "the PDF names the staff member whose device it was");
 });
 
 test("AMC sign: the PDF prints the serial recorded when the report was written, even if the unit's serial changes later", async () => {
   reset();
   const r = await awaiting();
   units.uA1.serialNo = "SN-CHANGED-LATER";
-  const s = await sign("custA", r);
+  const s = await sign("mgmt", r);
   assert.equal(s.status, 200);
   const text = await pdfText(files.get(rowOf(r.id).pdfFileId)!.bytes);
   assert.ok(text.includes("SN-A1"));
@@ -493,24 +509,48 @@ test("AMC sign: missing, empty, malformed or oversized signatures and a missing 
   reset();
   const r = await awaiting();
   for (const over of [{ signatureImage: undefined }, { signatureImage: "Asha Rao" }, { signatureImage: pngDataUrl(makePng({ ink: false })) }, { signatureImage: "data:image/png;base64,AAAA" }, { confirm: false }, { signerName: "A" }]) {
-    assert.equal((await sign("custA", r, over)).status, 400, JSON.stringify(over).slice(0, 60));
+    assert.equal((await sign("mgmt", r, over)).status, 400, JSON.stringify(over).slice(0, 60));
   }
   assert.equal(rowOf(r.id).status, "awaiting_signature");
   assert.equal(files.size, 0);
 });
 
-test("AMC sign: only the AMC's own customer - not another customer, not staff, not anonymous - and ids in the body change nothing", async () => {
+test("AMC sign: only staff with AMC rights can collect the signature, in person - customer logins, staff without access and anonymous callers cannot - and ids in the body change nothing", async () => {
   reset();
   const a = await awaiting("uA1", AMC1);
   const b = await awaiting("uB1", AMC2);
-  assert.equal((await sign("custB", a)).status, 404);
-  assert.equal((await sign("custA", b)).status, 404);
-  for (const who of ["mgmt", "amcOnly", "engA", "rm"]) assert.equal((await sign(who, a)).status, 403, who);
+  const sessionA = (await startSession("mgmt", a)).body.signingSession;
+  for (const who of ["custA", "custB"]) {
+    const attempt = await call(who, "POST", `/service-reports/${a.id}/sign`, signBody(a, { signingSession: sessionA }));
+    assert.deepEqual([attempt.status, attempt.body.code], [403, "IN_PERSON_ONLY"], who);
+  }
+  assert.equal((await startSession("custA", a)).status, 403);
+  assert.equal((await startSession("custB", a)).status, 404, "another customer cannot even tell it exists");
+  for (const who of ["engA", "engB", "sales"]) assert.equal((await sign(who, a)).status, 403, who);
   assert.equal((await call(null, "POST", `/service-reports/${a.id}/sign`, { signerName: "x" })).status, 401);
-  const smuggle = await call("custA", "POST", `/service-reports/${a.id}/sign`, { signerName: "Asha Rao", signatureImage: goodSignature(), version: a.version, confirm: true, customerId: "cB", amcOrderId: AMC2, unitId: "uB1", reportId: b.id });
+  assert.equal((await call(null, "POST", `/service-reports/${a.id}/signing-session`, { expectedVersion: 1, handoffConfirmed: true })).status, 401);
+  // a signing session for one report is useless on another
+  const crossed = await call("mgmt", "POST", `/service-reports/${b.id}/sign`, signBody(b, { signingSession: sessionA }));
+  assert.deepEqual([crossed.status, crossed.body.code], [403, "SIGNING_SESSION_INVALID"]);
+  assert.deepEqual([rowOf(a.id).status, rowOf(b.id).status], ["awaiting_signature", "awaiting_signature"]);
+  assert.equal(files.size, 0);
+  const smuggle = await sign("mgmt", a, { customerId: "cB", amcOrderId: AMC2, unitId: "uB1", reportId: b.id });
   assert.equal(smuggle.status, 200);
   assert.deepEqual([rowOf(a.id).status, rowOf(b.id).status], ["signed", "awaiting_signature"]);
   assert.deepEqual([rowOf(a.id).amcOrderId, rowOf(a.id).customerId, rowOf(a.id).unitId], [AMC1, "cA", "uA1"]);
+});
+
+test("AMC sign: the signer must be the customer's representative, not the staff member operating the device or the author of the report", async () => {
+  reset();
+  const r = await awaiting(); // written and submitted by Mia Manager
+  for (const name of ["Mia Manager", "mia  manager"]) {
+    const res = await sign("mgmt", r, { signerName: name });
+    assert.deepEqual([res.status, res.body.code], [400, "SIGNER_IS_STAFF"], name);
+  }
+  const operator = await sign("amcOnly", r, { signerName: "Amc Admin" });
+  assert.deepEqual([operator.status, operator.body.code], [400, "SIGNER_IS_STAFF"]);
+  assert.equal(rowOf(r.id).status, "awaiting_signature");
+  assert.equal(files.size, 0);
 });
 
 test("AMC sign: a reopened (edited) report cannot be signed on the old view; a tampered stored report is refused; a second signature is refused", async () => {
@@ -519,12 +559,12 @@ test("AMC sign: a reopened (edited) report cannot be signed on the old view; a t
   await call("mgmt", "POST", `/service-reports/${r.id}/reopen`, { expectedVersion: r.version });
   await call("mgmt", "PATCH", `/service-reports/${r.id}`, { expectedVersion: 2, resolution: "Revised resolution" });
   const v3 = await submit("mgmt", { id: r.id, version: 3 });
-  assert.equal((await sign("custA", r)).body.code, "STALE_VERSION");
+  assert.equal((await sign("mgmt", r)).body.code, "STALE_VERSION");
   rowOf(r.id).workPerformed = "Quietly changed";
-  assert.equal((await sign("custA", v3.body)).body.code, "REPORT_NOT_SIGNABLE");
+  assert.equal((await sign("mgmt", v3.body)).body.code, "REPORT_NOT_SIGNABLE");
   rowOf(r.id).workPerformed = fields().workPerformed;
-  assert.equal((await sign("custA", v3.body)).status, 200);
-  const again = await sign("custA", v3.body);
+  assert.equal((await sign("mgmt", v3.body)).status, 200);
+  const again = await call("mgmt", "POST", `/service-reports/${r.id}/sign`, signBody(v3.body, { signingSession: "x".repeat(40) }));
   assert.deepEqual([again.status, again.body.code], [409, "ALREADY_SIGNED"]);
   assert.equal(files.size, 2);
 });
@@ -541,7 +581,10 @@ test("signature required: every submit sends the report to the customer - no PDF
   assert.equal(sub.body.status, "awaiting_signature");
   assert.equal(files.size, 0, "no PDF and no signature file before the customer signs");
   assert.equal(rowOf(c.body.id).signedAt, null);
-  assert.equal((await call("mgmt", "POST", `/service-reports/${c.body.id}/sign`, { signerName: "Staff Member", signatureImage: goodSignature(), version: sub.body.version, confirm: true })).status, 403, "staff cannot sign for the customer");
+  // staff cannot sign for the customer: no hand-over means no signature, a made-up session is refused, and staff cannot sign under their own name
+  assert.equal((await call("mgmt", "POST", `/service-reports/${c.body.id}/sign`, { signerName: "Staff Member", signatureImage: goodSignature(), version: sub.body.version, confirm: true })).status, 400, "no hand-over, no signature");
+  assert.equal((await call("mgmt", "POST", `/service-reports/${c.body.id}/sign`, signBody(sub.body, { signerName: "Staff Member", signingSession: "x".repeat(40) }))).status, 403, "a made-up session");
+  assert.equal((await sign("mgmt", sub.body, { signerName: "Mia Manager" })).body.code, "SIGNER_IS_STAFF");
   assert.equal(rowOf(c.body.id).status, "awaiting_signature");
   assert.equal((await submit("mgmt", sub.body)).status, 409, "an awaiting report cannot be submitted again");
 });
@@ -553,7 +596,7 @@ test("signature required: a draft stored under the old option (acknowledgement o
   const sub = await submit("mgmt", { id: c.body.id, version: c.body.version });
   assert.deepEqual([sub.status, sub.body.status, sub.body.acknowledgementRequired], [200, "awaiting_signature", true]);
   assert.equal(files.size, 0);
-  const signedBody = await sign("custA", sub.body);
+  const signedBody = await sign("mgmt", sub.body);
   assert.equal(signedBody.status, 200, JSON.stringify(signedBody.body));
   assert.equal(signedBody.body.status, "signed");
   assert.equal(files.size, 2, "signature image and signed PDF");
@@ -569,7 +612,7 @@ test("older unsigned reports: a report finalised without a signature before this
     assert.equal(sha256Hex(d.buf), r.pdfSha256);
   }
   assert.equal((await call("custB", "GET", `/service-reports/${r.id}/pdf`)).status, 404);
-  const s = await sign("custA", { id: r.id, version: r.version });
+  const s = await sign("mgmt", { id: r.id, version: r.version });
   assert.deepEqual([s.status, s.body.code], [409, "BAD_TRANSITION"], "it can still not be signed afterwards");
   assert.equal((await call("mgmt", "PATCH", `/service-reports/${r.id}`, { expectedVersion: 1, findings: "Rewrite" })).status, 409);
   assert.equal((await call("mgmt", "POST", `/service-reports/${r.id}/reopen`, { expectedVersion: 1 })).status, 409);
@@ -608,7 +651,7 @@ test("download: not before finalisation; missing, damaged and unreachable files 
   reset();
   const r = await awaiting();
   assert.equal((await call("custA", "GET", `/service-reports/${r.id}/pdf`)).body.code, "NOT_SIGNED");
-  assert.equal((await sign("custA", r)).status, 200);
+  assert.equal((await sign("mgmt", r)).status, 200);
   storageFlags.corrupt = true;
   assert.equal((await call("custA", "GET", `/service-reports/${r.id}/pdf`)).body.code, "FILE_INTEGRITY");
   storageFlags.corrupt = false;
@@ -655,17 +698,11 @@ test("list by AMC order: context (AMC, units with serials), status of every repo
   assert.equal((await call("mgmt", "GET", "/service-reports?amcOrderId=nope")).status, 404);
 });
 
-test("customer entry point: /mine lists only the customer's own reports that have left draft", async () => {
+test("the customer portal list (/mine) no longer exists: the path is just an unknown report", async () => {
   reset();
-  const a1 = await awaiting("uA1", AMC1);
-  await createAmc("mgmt", AMC1, "uA2"); // a draft
-  await awaiting("uB1", AMC2);
-  const mine = await call("custA", "GET", "/service-reports/mine");
-  assert.equal(mine.status, 200);
-  assert.ok(mine.body.reports.length >= 1);
-  assert.ok(mine.body.reports.every((r: any) => r.customerId === "cA" && r.status !== "draft"));
-  assert.ok(mine.body.reports.some((r: any) => r.id === a1.id));
-  assert.equal((await call("mgmt", "GET", "/service-reports/mine")).status, 403);
+  await awaiting("uA1", AMC1);
+  assert.equal((await call("custA", "GET", "/service-reports/mine")).status, 404);
+  assert.equal((await call("mgmt", "GET", "/service-reports/mine")).status, 404);
   assert.equal((await call(null, "GET", "/service-reports/mine")).status, 401);
 });
 
@@ -677,12 +714,12 @@ test("failed PDF generation: signing answers 500, stores nothing, leaves the rep
   reset();
   const r = await awaiting();
   const spy = mock.method(PDFDocument.prototype, "image", () => { throw new Error("boom"); });
-  const failedSign = await sign("custA", r);
+  const failedSign = await sign("mgmt", r);
   spy.mock.restore();
   assert.deepEqual([failedSign.status, failedSign.body.code], [500, "PDF_GENERATION_FAILED"]);
   assert.equal(rowOf(r.id).status, "awaiting_signature");
   assert.equal(files.size, 0);
-  assert.equal((await sign("custA", r)).status, 200);
+  assert.equal((await sign("mgmt", r)).status, 200);
 });
 
 test("failed storage: no half-signed report and no orphan file - on either write; storage not configured is a 503", async () => {
@@ -690,7 +727,7 @@ test("failed storage: no half-signed report and no orphan file - on either write
     reset();
     const r = await awaiting();
     storageFlags.failPutNumber = failAt;
-    const res = await sign("custA", r);
+    const res = await sign("mgmt", r);
     assert.deepEqual([res.status, res.body.code], [502, "STORAGE_FAILED"], `put #${failAt}`);
     assert.deepEqual([rowOf(r.id).status, rowOf(r.id).pdfFileId, rowOf(r.id).signedAt], ["awaiting_signature", null, null]);
     assert.equal(files.size, 0);
@@ -698,7 +735,7 @@ test("failed storage: no half-signed report and no orphan file - on either write
   reset();
   const r2 = await awaiting();
   setReportStorageForTests(null);
-  assert.equal((await sign("custA", r2)).body.code, "STORAGE_NOT_CONFIGURED");
+  assert.equal((await sign("mgmt", r2)).body.code, "STORAGE_NOT_CONFIGURED");
   assert.equal(rowOf(r2.id).status, "awaiting_signature");
 });
 
@@ -706,14 +743,14 @@ test("failed database update at the last step: the stored files are removed agai
   reset();
   const r = await awaiting();
   dbFlags.failUpdateMany = true;
-  assert.equal((await sign("custA", r)).status, 500);
+  assert.equal((await sign("mgmt", r)).status, 500);
   assert.equal(files.size, 0);
 });
 
 test("simultaneous signing: exactly one signature wins and no surplus files remain", async () => {
   reset();
   const r = await awaiting();
-  const results = await Promise.all(Array.from({ length: 5 }, () => sign("custA", r)));
+  const results = await Promise.all(Array.from({ length: 5 }, () => sign("mgmt", r)));
   assert.equal(results.filter((x) => x.status === 200).length, 1, results.map((x) => x.status).join());
   assert.ok(results.filter((x) => x.status !== 200).every((x) => x.status === 409));
   assert.equal(files.size, 2);

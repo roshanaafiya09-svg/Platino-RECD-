@@ -61,6 +61,7 @@ function resetTickets() {
 let rows: any[] = [];
 let seq = 0;
 const events: any[] = [];
+const reportEvents: any[] = [];
 const tick = () => new Promise<void>((r) => setImmediate(r));
 const match = (r: any, where: any = {}) => Object.entries(where).every(([k, c]) => matchesCondition(r[k], c));
 const withIncludes = (r: any) => ({ ...r, complaint: r.complaintId ? tickets[r.complaintId] : null, amcOrder: null, site: r.complaintId ? tickets[r.complaintId]?.site ?? null : null, createdBy: { id: r.createdById, name: users[r.createdById]?.name ?? "?" } });
@@ -157,6 +158,7 @@ after(() => {
 function reset() {
   rows = [];
   events.length = 0;
+  reportEvents.length = 0;
   files.clear();
   seq = 0;
   fileSeq = 0;
@@ -173,7 +175,7 @@ function reset() {
   });
   stubModel("complaint", { findUnique: ({ where }: any) => (tickets[where.id] ? { ...tickets[where.id] } : null) });
   stubModel("complaintEvent", { create: ({ data }: any) => { events.push(data); return data; } });
-  stubModel("serviceReportEvent", { create: ({ data }: any) => data });
+  stubModel("serviceReportEvent", { create: ({ data }: any) => { reportEvents.push(data); return data; } });
   stubModel("serviceReport", serviceReportTable);
   stubModel("customer", { findUnique: ({ where }: any) => ({ name: where.id === "cA" ? "Acme Power Pvt Ltd" : "Beta Industries" }) });
   stubModel("site", { findUnique: ({ where }: any) => ({ companyName: `Plant ${where.id}`, address: `${where.id} Industrial Estate`, dgModel: "KG1-250", dgCapacityKva: 250 }) });
@@ -211,10 +213,24 @@ async function awaiting(complaintId = "t1", as = "mgmt") {
 }
 const goodSignature = () => pngDataUrl(makePng());
 const signBody = (r: any, over: Record<string, unknown> = {}) => ({ signerName: "Asha Rao", signatureImage: goodSignature(), version: r.version, confirm: true, ...over });
-const sign = (as: string, r: any, over: Record<string, unknown> = {}) => call(as, "POST", `/service-reports/${r.id}/sign`, signBody(r, over));
+const startSession = (as: string, r: any, over: Record<string, unknown> = {}) =>
+  call(as, "POST", `/service-reports/${r.id}/signing-session`, { expectedVersion: r.version, handoffConfirmed: true, ...over });
+/**
+ * IN-PERSON signing: the staff member `as` hands the device over (the signing session), then the customer's typed name and drawn signature are
+ * submitted from that same device. If the hand-over itself is refused, that answer is returned. Pass `signingSession` in `over` to use a given one.
+ */
+async function sign(as: string, r: any, over: Record<string, unknown> = {}) {
+  let signingSession: unknown = over.signingSession;
+  if (!("signingSession" in over)) {
+    const started = await startSession(as, r);
+    if (started.status !== 200) return started;
+    signingSession = started.body.signingSession;
+  }
+  return call(as, "POST", `/service-reports/${r.id}/sign`, signBody(r, { ...over, signingSession }));
+}
 async function signed(complaintId = "t1") {
   const r = await awaiting(complaintId);
-  const s = await sign("custA", r);
+  const s = await sign("mgmt", r);
   assert.equal(s.status, 200, JSON.stringify(s.body));
   return s.body;
 }
@@ -386,20 +402,20 @@ test("a signed report is final: no edit, no reopen, no second submit - and the s
 // Customer signature
 // =============================================================================================
 
-test("sign: the authenticated customer signs - signer, time, version, signature file and PDF are recorded against THIS report", async () => {
+test("sign: the customer signs in person on the staff device - signer, time, version, signature file and PDF are recorded against THIS report", async () => {
   reset();
   const r = await awaiting();
   const before = Date.now();
-  const s = await sign("custA", r, { signerName: "  Asha Rao  " });
+  const s = await sign("mgmt", r, { signerName: "  Asha Rao  " });
   assert.equal(s.status, 200, JSON.stringify(s.body));
   assert.equal(s.body.status, "signed");
-  assert.equal(s.body.signerName, "Asha Rao");
+  assert.equal(s.body.signerName, "Asha Rao", "the name the customer typed, trimmed");
   assert.equal(s.body.signedVersion, 1);
   assert.equal(s.body.pdfAvailable, true);
   assert.ok(new Date(s.body.signedAt).getTime() >= before - 1000);
 
   const row = rowOf(r.id);
-  assert.equal(row.signedById, "custA", "bound to the logged-in user, not to anything typed");
+  assert.equal(row.signedById, null, "no account is invented: the signer is the typed name, and the staff member is NOT recorded as the signer");
   assert.ok(row.signatureFileId && row.pdfFileId && row.pdfSha256);
   assert.equal(files.size, 2);
   assert.equal(files.get(row.signatureFileId)!.contentType, "image/png");
@@ -407,18 +423,30 @@ test("sign: the authenticated customer signs - signer, time, version, signature 
   assert.equal(sha256Hex(files.get(row.pdfFileId)!.bytes), row.pdfSha256);
   assert.ok(files.get(row.signatureFileId)!.bytes.equals(Buffer.from(goodSignature().split(",")[1], "base64")), "the stored signature is the one that was drawn");
   assert.equal(JSON.stringify(s.body).includes("signatureImage"), false);
+  assert.equal(JSON.stringify(s.body).includes("signingSession"), false, "the signing session is never echoed in a report");
 });
 
-test("sign: audit trail - created, submitted and signed are recorded on the ticket with who did it", async () => {
+test("sign: audit trail - created, submitted and signed are on the ticket; the hand-over is on the report's own history; staff are recorded as the device operator, never as the signer", async () => {
   reset();
   await signed();
   assert.deepEqual(events.map((e) => [e.type, e.actorId, e.toValue]), [
     ["service_report_created", "mgmt", "draft"],
     ["service_report_submitted", "mgmt", "awaiting_signature"],
-    ["service_report_signed", "custA", "signed"],
+    ["service_report_signed", "mgmt", "signed"],
   ]);
   assert.ok(events.every((e) => e.complaintId === "t1" && e.detail.reportNumber === "TCK-1-R1"));
   assert.equal(events[2].detail.version, 1);
+  assert.equal(events[2].detail.mode, "in_person");
+  assert.equal(events[2].detail.capturedById, "mgmt", "who operated the device");
+  assert.equal(events[2].detail.signerName, "Asha Rao", "who signed");
+  // the hand-over is recorded on the report's own history only (it is not a ticket-history entry)
+  const started = reportEvents.filter((e) => e.type === "service_report_signing_started");
+  assert.equal(started.length, 1);
+  assert.equal(started[0].actorId, "mgmt");
+  assert.equal(started[0].detail.mode, "in_person");
+  assert.equal(started[0].detail.handoffConfirmed, true);
+  assert.equal(events.some((e) => e.type === "service_report_signing_started"), false);
+  assert.equal(JSON.stringify(reportEvents).includes(goodSignature().slice(40, 80)), false, "no signature data in the audit trail");
 });
 
 test("sign: a missing, empty, malformed or oversized signature, a missing confirmation or a typed name alone are rejected; nothing is stored", async () => {
@@ -439,7 +467,7 @@ test("sign: a missing, empty, malformed or oversized signature, a missing confir
     ["no version", { version: undefined }],
   ];
   for (const [label, over] of bad) {
-    const res = await sign("custA", r, over);
+    const res = await sign("mgmt", r, over);
     assert.equal(res.status, 400, label);
     assert.equal(res.body.token, undefined);
   }
@@ -448,59 +476,91 @@ test("sign: a missing, empty, malformed or oversized signature, a missing confir
   assert.equal(events.filter((e) => e.type === "service_report_signed").length, 0);
 });
 
-test("sign: only the report's own customer can sign - not another customer, staff, an unsubmitted report or an anonymous caller", async () => {
+test("sign: only staff who handled the report can collect the signature, and only in person - a customer login, other staff, anonymous callers, an unsubmitted or unknown report are refused", async () => {
   reset();
   const r = await awaiting();
-  assert.equal((await sign("custB", r)).status, 404, "another customer cannot even tell it exists");
-  for (const who of ["mgmt", "engA", "overview", "sales", "rm"]) assert.equal((await sign(who, r)).status, 403, who);
-  assert.equal((await call(null, "POST", `/service-reports/${r.id}/sign`, signBody(r))).status, 401);
+  const goodSession = (await startSession("mgmt", r)).body.signingSession;
+  // a customer LOGIN cannot sign any more - not even with a valid session handed to them - and cannot start one
+  for (const who of ["custA", "custB"]) {
+    const attempt = await call(who, "POST", `/service-reports/${r.id}/sign`, signBody(r, { signingSession: goodSession }));
+    assert.equal(attempt.status, 403, who);
+    assert.equal(attempt.body.code, "IN_PERSON_ONLY", who);
+    assert.equal((await startSession(who, r)).status, who === "custA" ? 403 : 404, `${who} cannot start a signing (another customer cannot even tell the report exists)`);
+  }
+  // staff without write access to THIS report cannot start or collect
+  for (const who of ["engB", "overview", "sales"]) assert.equal((await sign(who, r)).status, 403, who);
+  for (const who of ["engB", "overview", "sales"]) {
+    const direct = await call(who, "POST", `/service-reports/${r.id}/sign`, signBody(r, { signingSession: goodSession }));
+    assert.equal(direct.status, 403, `${who} cannot reuse someone else's session`);
+  }
+  assert.equal((await call(null, "POST", `/service-reports/${r.id}/sign`, signBody(r, { signingSession: goodSession }))).status, 401);
+  assert.equal((await call(null, "POST", `/service-reports/${r.id}/signing-session`, { expectedVersion: 1, handoffConfirmed: true })).status, 401);
   assert.equal(rowOf(r.id).status, "awaiting_signature");
   assert.equal(files.size, 0);
 
   reset();
   const draft = await createDraft();
-  assert.equal((await sign("custA", draft.body)).status, 404, "a draft is not signable (and not visible)");
-  assert.equal((await call("custA", "POST", "/service-reports/nope/sign", signBody({ version: 1 }))).status, 404);
+  assert.equal((await sign("mgmt", draft.body)).status, 409, "a draft has not been submitted for signature");
+  const forged = await call("mgmt", "POST", `/service-reports/${draft.body.id}/sign`, signBody(draft.body, { signingSession: "x".repeat(40) }));
+  assert.equal(forged.status, 409);
+  assert.equal(forged.body.code, "BAD_TRANSITION");
+  assert.equal((await call("mgmt", "POST", "/service-reports/nope/sign", signBody({ version: 1 }, { signingSession: "x".repeat(40) }))).status, 404);
+  assert.equal((await call("mgmt", "POST", "/service-reports/nope/signing-session", { expectedVersion: 1, handoffConfirmed: true })).status, 404);
 });
 
 test("sign: a swapped report id, ticket id or customer id in the request cannot attach the signature elsewhere", async () => {
   reset();
   const a = await awaiting("t1");
   const bReport = await awaiting("t2", "mgmt");
-  // customer A tries to sign customer B's report, and to smuggle ids in the body
-  const attempt = await call("custA", "POST", `/service-reports/${bReport.id}/sign`, { ...signBody(bReport), customerId: "cA", complaintId: "t1", reportId: a.id });
-  assert.equal(attempt.status, 404);
-  const own = await call("custA", "POST", `/service-reports/${a.id}/sign`, { ...signBody(a), customerId: "cB", complaintId: "t2", reportId: bReport.id });
+  // a signing session for report A cannot be used on report B, and ids smuggled into the body are ignored
+  const sessionA = (await startSession("mgmt", a)).body.signingSession;
+  const attempt = await call("mgmt", "POST", `/service-reports/${bReport.id}/sign`, { ...signBody(bReport, { signingSession: sessionA }), customerId: "cA", complaintId: "t1", reportId: a.id });
+  assert.equal(attempt.status, 403);
+  assert.equal(attempt.body.code, "SIGNING_SESSION_INVALID");
+  const own = await sign("mgmt", a, { customerId: "cB", complaintId: "t2", reportId: bReport.id });
   assert.equal(own.status, 200);
   assert.equal(rowOf(a.id).status, "signed");
   assert.equal(rowOf(bReport.id).status, "awaiting_signature", "the other report is untouched");
   assert.equal(rowOf(a.id).customerId, "cA");
 });
 
-test("sign: the version the customer reviewed is what gets signed - an edited (reopened) report cannot be signed on the old view", async () => {
+test("sign: the version the customer reviewed is what gets signed - an edited (reopened) report cannot be signed on the old view or the old session", async () => {
   reset();
   const r = await awaiting();
+  const oldSession = (await startSession("mgmt", r)).body.signingSession; // the customer was shown version 1
   await call("mgmt", "POST", `/service-reports/${r.id}/reopen`, { expectedVersion: r.version });
-  const stale = await sign("custA", r); // customer still holds version 1
-  assert.equal(stale.status, 404, "it is a draft again");
+  const stale = await sign("mgmt", r); // the device still shows version 1
+  assert.equal(stale.status, 409, "it is a draft again");
   await call("mgmt", "PATCH", `/service-reports/${r.id}`, { expectedVersion: 2, resolution: "Revised resolution text" });
   const v3 = await call("mgmt", "POST", `/service-reports/${r.id}/submit`, { expectedVersion: 3 });
   assert.equal(v3.status, 200);
-  const old = await sign("custA", r);
+  const old = await sign("mgmt", r);
   assert.equal(old.status, 409);
   assert.equal(old.body.code, "STALE_VERSION");
-  const fresh = await sign("custA", v3.body);
+  // the OLD session with the OLD version: stale; with the NEW version: the session was issued for another version
+  const oldView = await call("mgmt", "POST", `/service-reports/${r.id}/sign`, signBody(r, { signingSession: oldSession }));
+  assert.equal(oldView.status, 409);
+  assert.equal(oldView.body.code, "STALE_VERSION");
+  const oldSessionNewView = await call("mgmt", "POST", `/service-reports/${r.id}/sign`, signBody(v3.body, { signingSession: oldSession }));
+  assert.equal(oldSessionNewView.status, 403);
+  assert.equal(oldSessionNewView.body.code, "SIGNING_SESSION_INVALID");
+  assert.equal(files.size, 0);
+  const fresh = await sign("mgmt", v3.body);
   assert.equal(fresh.status, 200);
   assert.equal(fresh.body.signedVersion, v3.body.version);
 });
 
-test("sign: if the stored content no longer matches what was submitted, signing is refused", async () => {
+test("sign: if the stored content no longer matches what was submitted, neither the hand-over nor the signing is possible", async () => {
   reset();
   const r = await awaiting();
+  const session = (await startSession("mgmt", r)).body.signingSession;
   rowOf(r.id).workPerformed = "Quietly changed after submission";
-  const res = await sign("custA", r);
+  const res = await call("mgmt", "POST", `/service-reports/${r.id}/sign`, signBody(r, { signingSession: session }));
   assert.equal(res.status, 409);
   assert.equal(res.body.code, "REPORT_NOT_SIGNABLE");
+  const again = await startSession("mgmt", r);
+  assert.equal(again.status, 409);
+  assert.equal(again.body.code, "REPORT_NOT_SIGNABLE");
   assert.equal(files.size, 0);
 });
 
@@ -509,18 +569,111 @@ test("sign: a second signature on an already-signed report is refused and change
   const s = await signed();
   const snapshot = JSON.stringify(rowOf(s.id));
   const filesBefore = files.size;
-  const again = await sign("custA", s, { signerName: "Someone Else", signatureImage: pngDataUrl(makePng({ width: 200, height: 100 })) });
+  const again = await call("mgmt", "POST", `/service-reports/${s.id}/sign`, signBody(s, { signerName: "Someone Else", signatureImage: pngDataUrl(makePng({ width: 200, height: 100 })), signingSession: "x".repeat(40) }));
   assert.equal(again.status, 409);
   assert.equal(again.body.code, "ALREADY_SIGNED");
+  assert.equal((await startSession("mgmt", s)).status, 409, "a signed report cannot be handed over for signing again");
   assert.equal(JSON.stringify(rowOf(s.id)), snapshot);
   assert.equal(files.size, filesBefore);
   assert.equal(events.filter((e) => e.type === "service_report_signed").length, 1);
 });
 
+// =============================================================================================
+// In-person signing: the hand-over, the signing session, and the signer
+// =============================================================================================
+
+test("hand-over: the signing session needs an explicit confirmation that the device is with the customer, and only a submitted, unchanged report at its current version gets one", async () => {
+  reset();
+  const draft = await createDraft();
+  assert.equal((await startSession("mgmt", draft.body)).status, 409, "not submitted yet");
+  reset();
+  const r = await awaiting();
+  for (const [label, over] of [["no confirmation", { handoffConfirmed: undefined }], ["confirmation false", { handoffConfirmed: false }], ["no version", { expectedVersion: undefined }]] as const) {
+    assert.equal((await startSession("mgmt", r, over)).status, 400, label);
+  }
+  assert.equal((await startSession("mgmt", r, { expectedVersion: 7 })).body.code, "STALE_VERSION");
+  assert.equal(reportEvents.filter((e) => e.type === "service_report_signing_started").length, 0, "refused hand-overs leave no record of a started signing");
+  const ok = await startSession("mgmt", r);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(typeof ok.body.signingSession, "string");
+  assert.ok(new Date(ok.body.expiresAt).getTime() > Date.now() && new Date(ok.body.expiresAt).getTime() <= Date.now() + (SERVICE_REPORT_LIMITS.SIGNING_SESSION_MINUTES * 60 * 1000) + 5000);
+  assert.equal(rowOf(r.id).status, "awaiting_signature", "starting the signing signs nothing");
+  assert.equal(files.size, 0);
+});
+
+test("signer: the signer must be the customer's representative - never the logged-in staff member and never the engineer who wrote the report; nothing is stored", async () => {
+  reset();
+  const r = await awaiting(); // written and submitted by Mia Manager
+  for (const name of ["Mia Manager", "  mia   MANAGER "]) {
+    const res = await sign("mgmt", r, { signerName: name });
+    assert.equal(res.status, 400, name);
+    assert.equal(res.body.code, "SIGNER_IS_STAFF", name);
+  }
+  assert.equal(rowOf(r.id).status, "awaiting_signature");
+  assert.equal(files.size, 0);
+  // another staff member operating the device may not sign as the engineer who wrote the report either
+  const res = await sign("rm", r, { signerName: "Mia Manager" });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, "SIGNER_IS_STAFF");
+  const asDeviceOperator = await sign("rm", r, { signerName: "Regional Manager" });
+  assert.equal(asDeviceOperator.status, 400, "nor as themselves");
+  assert.equal((await sign("mgmt", r, { signerName: "Asha Rao" })).status, 200, "the customer's own name is accepted");
+});
+
+test("signing session: forged, missing, someone else's, expired - the signature is refused and nothing is stored", async () => {
+  reset();
+  const r = await awaiting();
+  const good = (await startSession("mgmt", r)).body.signingSession as string;
+  const attempts: Array<[string, unknown, number]> = [
+    ["missing", undefined, 400],
+    ["too short", "abc", 400],
+    ["garbage", "x".repeat(60), 403],
+    ["a login token instead", tokenFor("mgmt"), 403],
+    ["payload edited", `${Buffer.from(JSON.stringify({ p: "x", r: r.id, v: 1, s: "mgmt", e: Date.now() + 1e9 })).toString("base64url")}.${good.split(".")[1]}`, 403],
+  ];
+  for (const [label, token, status] of attempts) {
+    const res = await call("mgmt", "POST", `/service-reports/${r.id}/sign`, signBody(r, { signingSession: token }));
+    assert.equal(res.status, status, label);
+  }
+  // a session started by one staff login cannot be used by another
+  const other = await call("rm", "POST", `/service-reports/${r.id}/sign`, signBody(r, { signingSession: good }));
+  assert.equal(other.status, 403);
+  assert.equal(other.body.code, "SIGNING_SESSION_INVALID");
+  // expired
+  const realNow = Date.now;
+  const start = realNow();
+  mock.method(Date, "now", () => start + (SERVICE_REPORT_LIMITS.SIGNING_SESSION_MINUTES * 60 * 1000) + 60_000);
+  try {
+    const late = await call("mgmt", "POST", `/service-reports/${r.id}/sign`, signBody(r, { signingSession: good }));
+    assert.equal(late.status, 403);
+    assert.equal(late.body.code, "SIGNING_SESSION_INVALID");
+    assert.match(late.body.error, /expired/i);
+  } finally {
+    mock.restoreAll();
+  }
+  assert.equal(rowOf(r.id).status, "awaiting_signature");
+  assert.equal(files.size, 0);
+  assert.equal((await call("mgmt", "POST", `/service-reports/${r.id}/sign`, signBody(r, { signingSession: good }))).status, 200, "the right session, in time, works");
+});
+
+test("signed PDF: it says the report was signed IN PERSON on the named staff member's device, and carries the typed name and the drawn signature", async () => {
+  reset();
+  const r = await awaiting();
+  assert.equal((await sign("rm", r, { signerName: "Asha Rao" })).status, 200);
+  const res = await call("mgmt", "GET", `/service-reports/${r.id}/pdf`);
+  const { PDFParse } = await import("pdf-parse");
+  const parser = new PDFParse({ data: new Uint8Array(res.buf) });
+  const text = (await parser.getText()).text.replace(/\s+/g, " ");
+  await parser.destroy();
+  for (const expected of ["Signed by: Asha Rao", "Signed in person on the device of: Regional Manager", "signed in person, on a Platino staff device"]) assert.ok(text.includes(expected), expected);
+  assert.equal(text.includes("authenticated customer contact"), false, "the old customer-login wording is gone");
+  assert.equal((res.buf.toString("latin1").match(/\/Subtype\s*\/Image/g) ?? []).length >= 1, true);
+});
+
 test("sign: simultaneous signing produces exactly one signed report and leaves no surplus files", async () => {
   reset();
   const r = await awaiting();
-  const results = await Promise.all(Array.from({ length: 5 }, () => sign("custA", r)));
+  const results = await Promise.all(Array.from({ length: 5 }, () => sign("mgmt", r)));
   assert.equal(results.filter((x) => x.status === 200).length, 1);
   assert.ok(results.filter((x) => x.status !== 200).every((x) => x.status === 409), results.map((x) => x.status).join());
   assert.equal(files.size, 2, "the losers removed the files they had stored");
@@ -538,7 +691,7 @@ test("failed PDF generation: 500, nothing stored, the report stays awaiting sign
   const r = await awaiting();
   const spy = mock.method(PDFDocument.prototype, "image", () => { throw new Error("boom"); });
   try {
-    const res = await sign("custA", r);
+    const res = await sign("mgmt", r);
     assert.equal(res.status, 500);
     assert.equal(res.body.code, "PDF_GENERATION_FAILED");
     assert.match(res.body.error, /Nothing was saved/);
@@ -547,7 +700,7 @@ test("failed PDF generation: 500, nothing stored, the report stays awaiting sign
   }
   assert.equal(rowOf(r.id).status, "awaiting_signature");
   assert.equal(files.size, 0);
-  assert.equal((await sign("custA", r)).status, 200, "a retry works");
+  assert.equal((await sign("mgmt", r)).status, 200, "a retry works");
 });
 
 test("failed file storage: 502, no half-signed record and no orphaned file, whichever write fails", async () => {
@@ -555,7 +708,7 @@ test("failed file storage: 502, no half-signed record and no orphaned file, whic
     reset();
     const r = await awaiting();
     storageFlags.failPutNumber = failAt;
-    const res = await sign("custA", r);
+    const res = await sign("mgmt", r);
     assert.equal(res.status, 502, `put #${failAt} fails`);
     assert.equal(res.body.code, "STORAGE_FAILED");
     assert.equal(rowOf(r.id).status, "awaiting_signature");
@@ -564,7 +717,7 @@ test("failed file storage: 502, no half-signed record and no orphaned file, whic
     assert.equal(files.size, 0, "the first file was removed again");
     storageFlags.failPutNumber = 0;
     storageFlags.puts = 0;
-    assert.equal((await sign("custA", r)).status, 200, "retry succeeds");
+    assert.equal((await sign("mgmt", r)).status, 200, "retry succeeds");
   }
 });
 
@@ -572,7 +725,7 @@ test("failed database update at the last step: the stored files are removed agai
   reset();
   const r = await awaiting();
   dbFlags.failUpdateMany = true;
-  const res = await sign("custA", r);
+  const res = await sign("mgmt", r);
   assert.equal(res.status, 500);
   assert.equal(files.size, 0);
   assert.equal(rowOf(r.id).status, "awaiting_signature");
@@ -582,12 +735,12 @@ test("storage not configured: signing and downloading answer 503 instead of pret
   reset();
   const r = await awaiting();
   setReportStorageForTests(null);
-  const res = await sign("custA", r);
+  const res = await sign("mgmt", r);
   assert.equal(res.status, 503);
   assert.equal(res.body.code, "STORAGE_NOT_CONFIGURED");
   assert.equal(rowOf(r.id).status, "awaiting_signature");
   setReportStorageForTests(memStorage);
-  const s = await sign("custA", r);
+  const s = await sign("mgmt", r);
   assert.equal(s.status, 200);
   setReportStorageForTests(null);
   assert.equal((await call("mgmt", "GET", `/service-reports/${r.id}/pdf`)).status, 503);
@@ -648,7 +801,7 @@ test("download: not before signing; a missing or tampered file and a storage out
   const early = await call("custA", "GET", `/service-reports/${r.id}/pdf`);
   assert.equal(early.status, 409);
   assert.equal(early.body.code, "NOT_SIGNED");
-  const s = await sign("custA", r);
+  const s = await sign("mgmt", r);
   assert.equal(s.status, 200);
 
   storageFlags.corrupt = true;
@@ -691,7 +844,7 @@ test("read: customers see reports that have left draft; staff see all; other cus
   assert.equal((await call("custA", "GET", "/service-reports?complaintId=t1")).body.reports.length, 1);
   const detail = await call("custA", "GET", `/service-reports/${draft.body.id}`);
   assert.equal(detail.status, 200);
-  assert.deepEqual(detail.body.permissions, { canEdit: false, canSubmit: false, canReopen: false, canSign: true });
+  assert.deepEqual(detail.body.permissions, { canEdit: false, canSubmit: false, canReopen: false, canCollectSignature: false });
   assert.equal(detail.body.customerName, "Acme Power Pvt Ltd");
   assert.equal(detail.body.unit.serialNo, "SN-uA");
   assert.equal((await call("custB", "GET", "/service-reports?complaintId=t1")).status, 404, "another customer's ticket");
@@ -702,7 +855,7 @@ test("read: customers see reports that have left draft; staff see all; other cus
   assert.equal((await call("custA", "GET", "/service-reports")).status, 400);
   assert.equal((await call("sales", "GET", "/service-reports")).status, 403);
   const staffDetail = await call("mgmt", "GET", `/service-reports/${draft.body.id}`);
-  assert.deepEqual(staffDetail.body.permissions, { canEdit: false, canSubmit: false, canReopen: true, canSign: false });
+  assert.deepEqual(staffDetail.body.permissions, { canEdit: false, canSubmit: false, canReopen: true, canCollectSignature: true });
 });
 
 // =============================================================================================

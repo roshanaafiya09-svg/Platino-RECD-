@@ -13,8 +13,8 @@ interface Props {
 
 /**
  * Draw-a-signature canvas for mouse, finger or stylus (Pointer Events + touch-action: none so the page does not
- * scroll while signing). It only produces an image: WHO signed is established by the signer's login, and the server
- * re-checks the PNG (type, size, not empty) - nothing here is trusted.
+ * scroll while signing). It only produces an image: the customer draws it in person on the staff device (the signing screen
+ * hands the device over first), and the server re-checks the PNG (type, size, not empty) - nothing here is trusted.
  */
 export default function SignaturePad({ onChange, disabled = false, width = 600, height = 200 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);

@@ -101,8 +101,23 @@ const skip = isolated
     assert.equal(s.status, 200, JSON.stringify(s.body));
     return s.body;
   }
-  const sign = (as: any, r: any, over: Record<string, unknown> = {}) =>
-    call(as, "POST", `/service-reports/${r.id}/sign`, { signerName: "Asha Rao", signatureImage: pngDataUrl(makePng()), version: r.version, confirm: true, ...over });
+  const startSession = (as: any, r: any, over: Record<string, unknown> = {}) =>
+    call(as, "POST", `/service-reports/${r.id}/signing-session`, { expectedVersion: r.version, handoffConfirmed: true, ...over });
+  const signBody = (r: any, over: Record<string, unknown> = {}) => ({ signerName: "Asha Rao", signatureImage: pngDataUrl(makePng()), version: r.version, confirm: true, ...over });
+  /**
+   * IN-PERSON signing: the staff member `as` hands the device over (the signing session), then the customer's typed name and drawn signature are submitted
+   * from that device. A customer LOGIN is sent straight to the signing route and is refused there. If the hand-over is refused, that answer is returned.
+   */
+  const sign = async (as: any, r: any, over: Record<string, unknown> = {}) => {
+    if (as?.customerId) return call(as, "POST", `/service-reports/${r.id}/sign`, signBody(r, over));
+    let signingSession: unknown = over.signingSession;
+    if (!("signingSession" in over)) {
+      const started = await startSession(as, r);
+      if (started.status !== 200) return started;
+      signingSession = started.body.signingSession;
+    }
+    return call(as, "POST", `/service-reports/${r.id}/sign`, signBody(r, { ...over, signingSession }));
+  };
   const reportFileCount = () => prisma.reportFile.count();
 
   before(async () => {
@@ -211,14 +226,14 @@ const skip = isolated
     assert.equal(r.unitId, world.A.unit.id);
 
     const filesBefore = await reportFileCount();
-    const s = await sign(world.A.contact, r);
+    const s = await sign(world.mgmt, r);
     assert.equal(s.status, 200, JSON.stringify(s.body));
     assert.equal(await reportFileCount(), filesBefore + 2, "a signature file and a PDF");
 
     const row = await prisma.serviceReport.findUniqueOrThrow({ where: { id: r.id } });
     assert.equal(row.status, "signed");
     assert.equal(row.signerName, "Asha Rao");
-    assert.equal(row.signedById, world.A.contact.id);
+    assert.equal(row.signedById, null, "no account is invented: the signer is the typed name, not the staff member");
     assert.equal(row.signedVersion, r.version);
     assert.ok(row.signedAt && row.submittedAt);
 
@@ -243,7 +258,9 @@ const skip = isolated
     assert.equal(after.serviceReportUrl, "data:application/pdf;base64,AAAA", "the legacy attachment is untouched");
     const events = await prisma.complaintEvent.findMany({ where: { complaintId: t.id }, orderBy: { createdAt: "asc" } });
     assert.deepEqual(events.map((e: any) => e.type), ["service_report_created", "service_report_submitted", "service_report_signed"]);
-    assert.equal(events[2].actorId, world.A.contact.id);
+    assert.equal(events[2].actorId, world.mgmt.id, "the staff member who operated the device");
+    assert.equal(events[2].detail.mode, "in_person");
+    assert.equal(events[2].detail.signerName, "Asha Rao");
   });
 
   test("ownership: ids in the request are ignored; another customer, another engineer and sales cannot reach the report", async () => {
@@ -255,7 +272,8 @@ const skip = isolated
 
     const sub = await call(world.eng, "POST", `/service-reports/${c.body.id}/submit`, { expectedVersion: 1 });
     assert.equal(sub.status, 200);
-    assert.equal((await sign(world.B.contact, sub.body)).status, 404, "customer B cannot sign customer A's report");
+    const customerSign = await sign(world.B.contact, sub.body);
+    assert.deepEqual([customerSign.status, customerSign.body.code], [403, "IN_PERSON_ONLY"], "a customer login cannot sign any report");
     assert.equal((await call(world.B.contact, "GET", `/service-reports/${c.body.id}`)).status, 404);
     assert.equal((await call(world.engOther, "GET", `/service-reports/${c.body.id}`)).status, 403);
     assert.equal((await call(world.sales, "GET", `/service-reports/${c.body.id}`)).status, 403);
@@ -271,7 +289,7 @@ const skip = isolated
   test("a signed report cannot be changed - not by the API and not even by a direct database update", async () => {
     const t = await makeTicket(world.A, world.eng.id);
     const r = await awaiting(t, world.eng);
-    const s = await sign(world.A.contact, r);
+    const s = await sign(world.mgmt, r);
     assert.equal(s.status, 200);
     assert.equal((await call(world.mgmt, "PATCH", `/service-reports/${r.id}`, { expectedVersion: r.version, findings: "Rewrite" })).status, 409);
     for (const change of [{ findings: "Rewrite" }, { signerName: "Someone Else" }, { status: "draft" }, { pdfSha256: "0".repeat(64) }, { version: 99 }]) {
@@ -286,7 +304,7 @@ const skip = isolated
     const w = await makeCustomer("C");
     const t = await makeTicket(w, world.eng.id);
     const r = await awaiting(t, world.eng);
-    assert.equal((await sign(w.contact, r)).status, 200);
+    assert.equal((await sign(world.mgmt, r)).status, 200);
 
     await assert.rejects(prisma.complaint.delete({ where: { id: t.id } }), (e: any) => e.code === "P2003", "the database refuses to delete a ticket that has a report");
     const api = await call(world.mgmt, "DELETE", `/complaints/${t.id}`);
@@ -318,7 +336,7 @@ const skip = isolated
     const t = await makeTicket(world.A, world.eng.id);
     const r = await awaiting(t, world.eng);
     const before = await reportFileCount();
-    const results = await Promise.all(Array.from({ length: 5 }, () => sign(world.A.contact, r)));
+    const results = await Promise.all(Array.from({ length: 5 }, () => sign(world.mgmt, r)));
     assert.equal(results.filter((x) => x.status === 200).length, 1, results.map((x) => x.status).join());
     assert.ok(results.filter((x) => x.status !== 200).every((x) => x.status === 409));
     assert.equal(await reportFileCount(), before + 2, "only the winner's two files remain");
@@ -337,13 +355,13 @@ const skip = isolated
       const t = await makeTicket(world.A, world.eng.id);
       const r = await awaiting(t, world.eng);
       const before = await reportFileCount();
-      const failed = await sign(world.A.contact, r);
+      const failed = await sign(world.mgmt, r);
       assert.equal(failed.status, 502);
       assert.equal(await reportFileCount(), before, "the first file was removed again");
       const row = await prisma.serviceReport.findUniqueOrThrow({ where: { id: r.id } });
       assert.deepEqual([row.status, row.signedAt, row.pdfFileId, row.signatureFileId], ["awaiting_signature", null, null, null]);
       puts = 10;
-      assert.equal((await sign(world.A.contact, r)).status, 200, "retry works");
+      assert.equal((await sign(world.mgmt, r)).status, 200, "retry works");
     } finally {
       setStorage(undefined);
     }
@@ -352,7 +370,7 @@ const skip = isolated
   test("download integrity: a damaged stored PDF is refused, a missing one is reported - never served", async () => {
     const t = await makeTicket(world.A, world.eng.id);
     const r = await awaiting(t, world.eng);
-    assert.equal((await sign(world.A.contact, r)).status, 200);
+    assert.equal((await sign(world.mgmt, r)).status, 200);
     const row = await prisma.serviceReport.findUniqueOrThrow({ where: { id: r.id } });
     const file = await prisma.reportFile.findUniqueOrThrow({ where: { id: row.pdfFileId } });
     // The database now refuses to change a stored report file (migration 20261101090000), so the damage is simulated the way real corruption
@@ -375,7 +393,7 @@ const skip = isolated
   test("list queries never load file contents: the report list returns metadata only", async () => {
     const t = await makeTicket(world.A, world.eng.id);
     const r = await awaiting(t, world.eng);
-    await sign(world.A.contact, r);
+    await sign(world.mgmt, r);
     const list = await call(world.eng, "GET", `/service-reports?complaintId=${t.id}`);
     assert.equal(list.status, 200);
     const text = JSON.stringify(list.body);

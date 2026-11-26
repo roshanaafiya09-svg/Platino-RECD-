@@ -103,7 +103,23 @@ const skip = isolated
     return { status: res.status, body: json };
   }
   const fields = { visitDate: "2026-10-14", workPerformed: "Replaced the gasket.", findings: "Exhaust leak at the flange.", resolution: "Leak sealed." };
-  const sign = (as: any, r: any) => call(as, "POST", `/service-reports/${r.id}/sign`, { signerName: "Asha Rao", signatureImage: pngDataUrl(makePng()), version: r.version, confirm: true });
+  const startSession = (as: any, r: any, over: Record<string, unknown> = {}) =>
+    call(as, "POST", `/service-reports/${r.id}/signing-session`, { expectedVersion: r.version, handoffConfirmed: true, ...over });
+  const signBody = (r: any, over: Record<string, unknown> = {}) => ({ signerName: "Asha Rao", signatureImage: pngDataUrl(makePng()), version: r.version, confirm: true, ...over });
+  /**
+   * IN-PERSON signing: the staff member `as` hands the device over (the signing session), then the customer's typed name and drawn signature are submitted
+   * from that device. A customer LOGIN is sent straight to the signing route and is refused there. If the hand-over is refused, that answer is returned.
+   */
+  const sign = async (as: any, r: any, over: Record<string, unknown> = {}) => {
+    if (as?.customerId) return call(as, "POST", `/service-reports/${r.id}/sign`, signBody(r, over));
+    let signingSession: unknown = over.signingSession;
+    if (!("signingSession" in over)) {
+      const started = await startSession(as, r);
+      if (started.status !== 200) return started;
+      signingSession = started.body.signingSession;
+    }
+    return call(as, "POST", `/service-reports/${r.id}/sign`, signBody(r, { ...over, signingSession }));
+  };
 
   async function ticketReport(side: any, staff: any, ticket = side.ticket) {
     const c = await call(staff, "POST", "/service-reports", { complaintId: ticket.id, ...fields });
@@ -114,7 +130,7 @@ const skip = isolated
     const d = await ticketReport(side, staff, ticket);
     const s = await call(staff, "POST", `/service-reports/${d.id}/submit`, { expectedVersion: d.version });
     assert.equal(s.status, 200, JSON.stringify(s.body));
-    const signed = await sign(side.contact, s.body);
+    const signed = await sign(staff, s.body);
     assert.equal(signed.status, 200, JSON.stringify(signed.body));
     return signed.body;
   }
@@ -208,7 +224,7 @@ const skip = isolated
     const sub = await call(W.mgmt, "POST", `/service-reports/${amc.body.id}/submit`, { expectedVersion: amc.body.version });
     assert.equal(sub.status, 200, JSON.stringify(sub.body));
     assert.equal(sub.body.status, "awaiting_signature", "every report waits for the customer");
-    const signedAmc = await sign(W.A.contact, sub.body);
+    const signedAmc = await sign(W.mgmt, sub.body);
     assert.equal(signedAmc.status, 200, JSON.stringify(signedAmc.body));
     W.amcA = signedAmc.body; // final, signed by the customer
     assert.equal(W.amcA.status, "signed");
@@ -253,12 +269,10 @@ const skip = isolated
     }
   });
 
-  test("roles without report rights get 403; a customer cannot use the staff list (400) but still has /mine", async () => {
+  test("roles without report rights get 403; a customer cannot use the staff list (400) and no longer has a /mine list", async () => {
     assert.equal((await call(W.sales, "GET", "/service-reports")).status, 403);
     assert.equal((await call(W.A.contact, "GET", "/service-reports")).status, 400);
-    const mine = await call(W.A.contact, "GET", "/service-reports/mine");
-    assert.equal(mine.status, 200);
-    assert.deepEqual(new Set(mine.body.reports.map((r: any) => r.id)), new Set([W.signedA.id, W.amcA.id]), "the customer's own, non-draft reports only");
+    assert.equal((await call(W.A.contact, "GET", "/service-reports/mine")).status, 404);
   });
 
   test("filters (status, kind, customer, site, unit, free text) only ever narrow the caller's own scope", async () => {
@@ -333,8 +347,8 @@ const skip = isolated
     const sideC = await makeSide("C", W.R1, W.V1, W.eng1);
     const signed = await signedTicketReport(sideC, W.mgmt);
     const before = await row(signed.id);
-    assert.equal(before.signedById, sideC.contact.id);
-    await prisma.user.delete({ where: { id: sideC.contact.id } }); // ON DELETE SET NULL on signedById
+    assert.equal(before.signedById, null, "in-person signing records no signer account: the typed name is the signer");
+    await prisma.user.delete({ where: { id: sideC.contact.id } }); // the customer contact's own account can be deleted without touching the report
     tracked.userIds.delete(sideC.contact.id);
     const after = await row(signed.id);
     assert.equal(after.signedById, null);
@@ -393,7 +407,8 @@ const skip = isolated
       assert.equal((await call(W.mgmt, "POST", `/service-reports/${final.id}/reopen`, { expectedVersion: final.version })).status, 409);
       assert.equal((await call(W.mgmt, "POST", `/service-reports/${final.id}/submit`, { expectedVersion: final.version })).status, 409);
     }
-    assert.equal((await sign(W.A.contact, W.signedA)).status, 409, "a signed report cannot be signed again");
+    const again = await call(W.mgmt, "POST", `/service-reports/${W.signedA.id}/sign`, signBody(W.signedA, { signingSession: "x".repeat(40) }));
+    assert.deepEqual([again.status, again.body.code], [409, "ALREADY_SIGNED"], "a signed report cannot be signed again");
     const after = await row(W.signedA.id);
     assert.deepEqual([after.siteId, after.unitId, after.customerId, after.findings], [W.A.site.id, W.A.unit.id, W.A.customer.id, fields.findings]);
   });
@@ -411,7 +426,7 @@ const skip = isolated
     assert.equal(again.status, 200);
     const sub2 = await call(W.eng2, "POST", `/service-reports/${d.id}/submit`, { expectedVersion: again.body.version });
     assert.equal(sub2.status, 200);
-    assert.equal((await sign(W.B.contact, sub2.body)).status, 200);
+    assert.equal((await sign(W.mgmt, sub2.body)).status, 200);
     assert.equal((await row(d.id)).status, "signed");
   });
 
