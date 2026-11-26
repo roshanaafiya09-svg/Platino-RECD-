@@ -1,5 +1,5 @@
 /** CRUD for the in-app agent's LLM provider settings (name/key/model/priority/fallback).
- * Super-Admin only (MANAGE_SETTINGS), same gate as company settings - matches the original
+ * Settings managers only (MANAGE_SETTINGS: Super Admin, Owner / Admin and Management by default), same gate as company settings - matches the original
  * decision that agent configuration is a Super-Admin concern. The encrypted API key is
  * NEVER included in any response - only whether one is set (hasApiKey).
  */
