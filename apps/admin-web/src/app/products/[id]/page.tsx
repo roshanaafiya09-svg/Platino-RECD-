@@ -38,21 +38,21 @@ export default function ProductDetailPage() {
   const load = useCallback(() => {
     if (!id) return;
     setError(null);
-    api<ProductDetail>(`/products/${id}`).then(setProduct).catch((e) => setError(e instanceof Error ? e.message : "Failed to load product"));
+    api<ProductDetail>(`/products/${id}`).then(setProduct).catch((e) => setError(e instanceof Error ? e.message : "Failed to load item"));
   }, [id]);
 
   useEffect(load, [load]);
 
   async function remove() {
     if (!product) return;
-    if (!window.confirm(`Delete product "${product.name}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete item "${product.name}"? This cannot be undone.`)) return;
     setDeleting(true);
     setError(null);
     try {
       await api(`/products/${id}`, { method: "DELETE" });
       router.push("/products");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete product");
+      setError(err instanceof Error ? err.message : "Failed to delete item");
       setDeleting(false);
     }
   }
@@ -64,7 +64,7 @@ export default function ProductDetailPage() {
     <div className="space-y-6 max-w-3xl" data-testid="product-detail-page">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <Link href="/products" className="text-xs font-medium text-gray-400 hover:text-gray-600">← Products</Link>
+          <Link href="/products" className="text-xs font-medium text-gray-400 hover:text-gray-600">← Items</Link>
           <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>{product.name}</h1>
           <p className="text-sm text-gray-500 font-mono">{product.model}</p>
         </div>

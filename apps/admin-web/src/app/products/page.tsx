@@ -73,7 +73,7 @@ function ProductsPageInner() {
   function load() {
     api<Product[]>("/products")
       .then(setProducts)
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load products"));
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load items"));
   }
 
   useEffect(load, []);
@@ -145,21 +145,21 @@ function ProductsPageInner() {
       setForm(emptyForm);
       load();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to save product");
+      setFormError(err instanceof Error ? err.message : "Failed to save item");
     } finally {
       setSaving(false);
     }
   }
 
   async function remove(p: Product) {
-    if (!confirm(`Delete product "${p.name}"? This cannot be undone.`)) return;
+    if (!confirm(`Delete item "${p.name}"? This cannot be undone.`)) return;
     setDeletingId(p.id);
     setDeleteError(null);
     try {
       await api(`/products/${p.id}`, { method: "DELETE" });
       load();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : "Failed to delete product");
+      setDeleteError(err instanceof Error ? err.message : "Failed to delete item");
     } finally {
       setDeletingId(null);
     }
@@ -169,7 +169,7 @@ function ProductsPageInner() {
     <div className="space-y-6 max-w-5xl" data-testid="products-page">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 print:hidden">
         <div>
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Products</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Items</h1>
           <p className="mt-1 text-sm text-gray-500">RECD models used across orders and sites.</p>
         </div>
         {canManage && (
@@ -178,7 +178,7 @@ function ProductsPageInner() {
             onClick={openCreate}
             className="btn-primary px-4 py-2 text-sm self-start sm:self-auto"
           >
-            + New product
+            + New item
           </button>
         )}
       </div>
@@ -188,10 +188,10 @@ function ProductsPageInner() {
 
       <DataTable
         storageKey="products"
-        title="Products"
+        title="Items"
         rows={products}
         rowKey={(p) => p.id}
-        emptyMessage="No products yet."
+        emptyMessage="No items yet."
         columns={[
           {
             key: "name",
@@ -250,7 +250,7 @@ function ProductsPageInner() {
           <div className="cards-mobile" data-testid="products-mobile-cards">
             {filteredProducts.length === 0 ? (
               <div className="card p-6 text-center text-sm text-gray-400">
-                {products.length === 0 ? "No products yet." : "No rows match the current filters."}
+                {products.length === 0 ? "No items yet." : "No rows match the current filters."}
               </div>
             ) : (
               filteredProducts.map((p) => (
@@ -300,11 +300,11 @@ function ProductsPageInner() {
         <div className="modal-backdrop" onClick={() => setOpen(false)}>
           <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold">{editing ? "Edit product" : "New product"}</h3>
+              <h3 className="text-lg font-semibold">{editing ? "Edit item" : "New item"}</h3>
               <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
             </div>
             <form onSubmit={submit} className="space-y-3">
-              <input required placeholder="Product name" className="field w-full" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <input required placeholder="Item name" className="field w-full" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <input required placeholder="Model (unique)" className="field w-full" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} />
               <input placeholder="Rating spec (optional)" className="field w-full" value={form.ratingSpec} onChange={(e) => setForm({ ...form, ratingSpec: e.target.value })} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -335,7 +335,7 @@ function ProductsPageInner() {
               <div className="flex justify-end gap-3 pt-1">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
                 <button type="submit" disabled={saving} className="btn-primary px-4 py-2 text-sm">
-                  {saving ? (editing ? "Saving…" : "Creating…") : editing ? "Save changes" : "Create product"}
+                  {saving ? (editing ? "Saving…" : "Creating…") : editing ? "Save changes" : "Create item"}
                 </button>
               </div>
             </form>
