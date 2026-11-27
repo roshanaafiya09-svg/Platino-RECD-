@@ -9,6 +9,7 @@ import AgentChatBubble from "./AgentChatBubble";
 import AmcExpiryNotice from "./AmcExpiryNotice";
 import WarrantyExpiryNotice from "./WarrantyExpiryNotice";
 import { isInPersonSigningPath, SERVICE_REPORT_LIST_PERMISSIONS } from "@/lib/routeAccess";
+import { hasCredentialForPath, takeAfterLoginPath } from "@/lib/signingCredential";
 
 /** Standalone pages that need no sign-in (no sidebar, no auth redirects). */
 const PUBLIC_PATHS = ["/vendor/register", "/report-issue"];
@@ -102,6 +103,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     if (PUBLIC_PATHS.includes(pathname)) return; // public pages - no auth handling
 
     if (!user) {
+      // The customer step of the in-person signing runs on a signing credential, not on a staff login (lib/signingCredential.ts).
+      if (isInPersonSigningPath(pathname) && hasCredentialForPath(pathname)) return;
       if (pathname !== "/login") router.push("/login");
       return;
     }
@@ -118,7 +121,9 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
     // Staff: bounce off the auth pages onto their first accessible module.
     if (pathname === "/login" || pathname === "/change-password" || pathname === "/customer/portal") {
-      const landing = firstLanding(user.permissions);
+      // After signing in again from the signing screen, go back to that report; otherwise to the first module as usual.
+      const back = pathname === "/login" ? takeAfterLoginPath() : null;
+      const landing = back ?? firstLanding(user.permissions);
       if (landing) router.push(landing);
       return;
     }
@@ -159,6 +164,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const isCustomerPortal = pathname === "/customer/portal";
 
   if (!user) {
+    if (isInPersonSigningPath(pathname) && hasCredentialForPath(pathname)) return <div className="min-h-screen bg-gray-50">{children}</div>;
     return isLoginPage ? <>{children}</> : null;
   }
 

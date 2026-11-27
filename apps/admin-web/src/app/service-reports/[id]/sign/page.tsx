@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { SERVICE_REPORT_LIMITS, SERVICE_REPORT_STATUS, type ServiceReportStatus } from "@recd/shared";
-import { api, ApiRequestError } from "@/lib/apiClient";
+import { api, apiWithSigningCredential, ApiRequestError } from "@/lib/apiClient";
+import { clearSigningCredential, readSigningCredential, releaseStaffLogin, saveSigningCredential, setAfterLoginPath, type StoredSigningCredential } from "@/lib/signingCredential";
 import { apiErrorMessage } from "@/lib/apiError";
 import SignaturePad from "@/components/SignaturePad";
 import { downloadReportPdf, openReportPdf, withPdfFallbackHint } from "@/lib/reportFiles";
@@ -35,7 +36,43 @@ interface ReportDetail {
   permissions: { canCollectSignature: boolean };
 }
 
-type Stage = "handoff" | "customer" | "done";
+type Stage = "handoff" | "customer" | "done" | "ended";
+
+/** What GET /service-reports/:id/signing-view returns to the customer step: only what the customer is shown. */
+interface SigningView {
+  id: string;
+  reportNumber: string;
+  kind: "ticket" | "amc" | "direct";
+  ticketNumber: string | null;
+  amc: { ref: string } | null;
+  status: ServiceReportStatus;
+  version: number;
+  visitDate: string;
+  workPerformed: string;
+  findings: string;
+  resolution: string;
+  partsUsed: string | null;
+  remarks: string | null;
+  engineer: { name: string };
+  customerName: string | null;
+  site: ReportDetail["site"];
+  unit: ReportDetail["unit"];
+}
+
+/** The customer step shows the same screen from the smaller view: the fields it does not get are simply empty. */
+function reportFromSigningView(v: SigningView): ReportDetail {
+  return {
+    id: v.id, reportNumber: v.reportNumber, kind: v.kind, complaintId: null, ticketNumber: v.ticketNumber,
+    amc: v.amc ? { id: "", ref: v.amc.ref, poNo: "", type: "", typeLabel: "" } : null,
+    status: v.status, version: v.version, visitDate: v.visitDate, workPerformed: v.workPerformed, findings: v.findings, resolution: v.resolution,
+    partsUsed: v.partsUsed, remarks: v.remarks, engineer: { id: "", name: v.engineer.name }, signedAt: null, signerName: null, pdfAvailable: false,
+    customerName: v.customerName, site: v.site, unit: v.unit, permissions: { canCollectSignature: true },
+  };
+}
+
+const SESSION_ENDED = "This signing session has ended. Nothing was saved.";
+// What the server says when the credential is no longer good (ended, cancelled, replaced, expired, report changed): the customer step cannot continue.
+const ENDING_CODES = ["SIGNING_SESSION_INVALID", "STALE_VERSION", "ALREADY_SIGNED", "REPORT_NOT_SIGNABLE", "BAD_TRANSITION"];
 
 /**
  * IN-PERSON SIGNING (/service-reports/<id>/sign). The page a member of staff lands on right after "Submit for customer signature", and the one
@@ -45,6 +82,11 @@ type Stage = "handoff" | "customer" | "done";
  *   2. customer - addressed to the CUSTOMER: review the report, type YOUR OWN name (the box starts empty), draw YOUR signature, tick the approval.
  *   3. done     - addressed to STAFF again: the confirmation, the signed PDF and the way back.
  * The server re-checks everything (the signing session, the report version, the signature image, that the signer is not the staff member).
+ *
+ * THE STAFF LOGIN IS NOT ON THE DEVICE DURING STEP 2. Pressing the hand-over button asks the server for a SIGNING CREDENTIAL that can read and sign this one
+ * report (and cancel its signing) for a few minutes and nothing else; the staff login token is then removed from this device (lib/signingCredential.ts).
+ * Step 2 and the confirmation use only the credential, which this tab keeps in sessionStorage so a reload resumes the customer step. When the signing is
+ * finished, cancelled or has run out, staff sign in again (password or Google) to continue; the sign-in returns them to the report.
  */
 export default function InPersonSigningPage() {
   const { id } = useParams<{ id: string }>();
@@ -57,6 +99,39 @@ export default function InPersonSigningPage() {
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState<null | "start" | "sign" | "download">(null);
   const [error, setError] = useState<string | null>(null);
+  const [credential, setCredential] = useState<StoredSigningCredential | null>(null); // set while the customer step runs on a signing credential
+  const [viaCredential, setViaCredential] = useState(false); // this device is (or was) in the customer step without a staff login
+  const [endedMessage, setEndedMessage] = useState<string | null>(null);
+
+  /** The customer step is over (cancelled, finished badly, expired, replaced): forget everything about it. Staff sign in again to carry on. */
+  const endCustomerStep = useCallback((message: string) => {
+    clearSigningCredential();
+    setCredential(null);
+    setSession(null);
+    setSignerName("");
+    setSignatureImage(null);
+    setConfirm(false);
+    setError(null);
+    setEndedMessage(message);
+    setStage("ended");
+  }, []);
+
+  const loadCustomerView = useCallback(
+    async (c: StoredSigningCredential) => {
+      try {
+        const v = await apiWithSigningCredential<SigningView>(`/service-reports/${c.reportId}/signing-view`, c.token);
+        setReport(reportFromSigningView(v));
+        setCredential(c);
+        setViaCredential(true);
+        setLoadError(null);
+        setStage("customer");
+      } catch (err) {
+        const notWaiting = err instanceof ApiRequestError && err.status === 409;
+        endCustomerStep(notWaiting ? "This report is no longer waiting for a signature." : SESSION_ENDED);
+      }
+    },
+    [endCustomerStep],
+  );
 
   const load = useCallback(() => {
     setLoadError(null);
@@ -72,9 +147,19 @@ export default function InPersonSigningPage() {
       });
   }, [id]);
 
+  // A reload of this page during the customer step resumes it from the credential this tab kept; otherwise this is a normal staff visit.
   useEffect(() => {
-    load();
-  }, [load]);
+    const stored = readSigningCredential(id);
+    if (stored) void loadCustomerView(stored);
+    else void load();
+  }, [id, load, loadCustomerView]);
+
+  // The credential runs out after a few minutes (the server enforces it): end the customer step on screen at that moment too.
+  useEffect(() => {
+    if (!credential || stage !== "customer") return;
+    const t = setTimeout(() => endCustomerStep(SESSION_ENDED), Math.max(0, Date.parse(credential.expiresAt) - Date.now()));
+    return () => clearTimeout(t);
+  }, [credential, stage, endCustomerStep]);
 
   function backToHandoff(message: string) {
     // The session, the typed name and the drawing belong to one hand-over: start again from the hand-over step with fresh data.
@@ -92,12 +177,21 @@ export default function InPersonSigningPage() {
     setBusy("start");
     setError(null);
     try {
-      const r = await api<{ signingSession: string }>(`/service-reports/${id}/signing-session`, {
+      const r = await api<{ signingSession: string; signingCredential?: string; expiresAt?: string; version?: number }>(`/service-reports/${id}/signing-session`, {
         method: "POST",
         body: JSON.stringify({ expectedVersion: report.version, handoffConfirmed: true }),
       });
-      setSession(r.signingSession);
-      setStage("customer");
+      if (r.signingCredential && r.expiresAt) {
+        // From here the customer step uses ONLY the signing credential: keep it for this tab, then take the staff login off the device.
+        const c: StoredSigningCredential = { reportId: id, token: r.signingCredential, expiresAt: r.expiresAt, version: r.version ?? report.version };
+        saveSigningCredential(c);
+        releaseStaffLogin();
+        await loadCustomerView(c);
+      } else {
+        // An API without signing credentials (not expected): the earlier flow, with the staff login.
+        setSession(r.signingSession);
+        setStage("customer");
+      }
     } catch (err) {
       setError(apiErrorMessage(err, "The signing could not be started."));
       if (err instanceof ApiRequestError && (err.body.code === "STALE_VERSION" || err.body.code === "BAD_TRANSITION" || err.body.code === "REPORT_NOT_SIGNABLE")) load();
@@ -107,14 +201,36 @@ export default function InPersonSigningPage() {
   }
 
   async function signNow() {
-    if (!report || !session || !signatureImage) return;
+    if (!report || (!session && !credential) || !signatureImage) return;
     setBusy("sign");
     setError(null);
+    if (credential) {
+      // Customer step: only the signing credential is used (no staff login on this device).
+      try {
+        const done = await apiWithSigningCredential<{ signedAt: string | null; signerName: string | null }>(`/service-reports/${id}/sign`, credential.token, {
+          method: "POST",
+          body: JSON.stringify({ signerName, signatureImage, version: report.version, confirm: true, signingSession: credential.token }),
+        });
+        clearSigningCredential();
+        setCredential(null);
+        setSignatureImage(null);
+        setReport({ ...report, status: SERVICE_REPORT_STATUS.SIGNED, signedAt: done.signedAt, signerName: done.signerName });
+        setStage("done");
+      } catch (err) {
+        const code = err instanceof ApiRequestError ? (err.body.code as string | undefined) : undefined;
+        const text = apiErrorMessage(err, "The report could not be signed. Nothing was saved.");
+        if ((err instanceof ApiRequestError && err.status === 401) || (code && ENDING_CODES.includes(code))) endCustomerStep(text);
+        else setError(text); // e.g. a name that is not the customer's, or a signature that is too small: the customer can correct it and try again
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
     try {
       await api(`/service-reports/${id}/sign`, {
         method: "POST",
         body: JSON.stringify({ signerName, signatureImage, version: report.version, confirm: true, signingSession: session }),
-      });
+      }); // (staff-login path, kept for an API without signing credentials)
       setSession(null);
       setSignatureImage(null);
       setStage("done");
@@ -127,6 +243,20 @@ export default function InPersonSigningPage() {
     } finally {
       setBusy(null);
     }
+  }
+
+  /** Cancel: the credential is ended at the server at once, then forgotten here. Staff sign in again to carry on. */
+  async function cancelSigning() {
+    if (credential) {
+      try {
+        await apiWithSigningCredential(`/service-reports/${id}/signing-session/cancel`, credential.token, { method: "POST", body: "{}" });
+      } catch {
+        // already ended or unreachable: the credential is dropped from this device either way and expires on its own
+      }
+      endCustomerStep("Signing was cancelled. Nothing was saved.");
+      return;
+    }
+    backToHandoff("Signing was cancelled. Nothing was saved.");
   }
 
   async function download(open: boolean) {
@@ -144,6 +274,31 @@ export default function InPersonSigningPage() {
   }
 
   const backHref = report ? `/service-reports/${report.id}` : "/service-reports";
+
+  const staffSignIn = (
+    <Link
+      href="/login"
+      onClick={() => setAfterLoginPath(`/service-reports/${id}`)}
+      className="btn-primary inline-flex min-h-[44px] items-center px-5 text-sm font-semibold"
+      data-testid="staff-sign-in"
+    >
+      Platino staff: sign in to continue
+    </Link>
+  );
+
+  // ---- The customer step is over without a signature (cancelled, expired, replaced, or the report changed)
+  if (stage === "ended") {
+    return (
+      <div className="mx-auto max-w-xl space-y-5 p-6" data-testid="signing-ended">
+        <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-5">
+          <h1 className="text-xl font-semibold text-amber-900">This signing screen has closed</h1>
+          <p className="text-sm text-amber-900" data-testid="signing-ended-message">{endedMessage}</p>
+          <p className="text-sm text-amber-900">Please hand the device back to Platino staff.</p>
+        </div>
+        {staffSignIn}
+      </div>
+    );
+  }
 
   if (loadError) {
     return (
@@ -207,6 +362,26 @@ export default function InPersonSigningPage() {
             {busy === "start" ? "Starting…" : "The customer has the device – start signing"}
           </button>
           <Link href={backHref} className="inline-flex min-h-[44px] items-center text-sm font-medium text-gray-600 hover:underline md:min-h-0">Back to the report</Link>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- Step 3 after a customer-step signing: no staff login is on this device, so there is nothing to download here - staff sign in again first
+  if (stage === "done" && viaCredential) {
+    return (
+      <div className="mx-auto max-w-xl space-y-5 p-6" data-testid="signing-done">
+        <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+          <h1 className="text-xl font-semibold text-emerald-800">Report signed and final</h1>
+          <p className="text-sm text-emerald-900">
+            Report {report.reportNumber} was signed by <strong>{report.signerName ?? "the customer"}</strong>
+            {report.signedAt ? <> on {new Date(report.signedAt).toLocaleString()}</> : null}. The signed PDF has been saved and the report can no longer be changed.
+          </p>
+          <p className="text-sm text-emerald-900">Thank you. Please hand the device back to Platino staff.</p>
+        </div>
+        <div className="space-y-2">
+          <p className="text-xs text-gray-500">The signed PDF is available to Platino staff after they sign in.</p>
+          {staffSignIn}
         </div>
       </div>
     );
@@ -311,7 +486,7 @@ export default function InPersonSigningPage() {
       </section>
 
       <p className="text-center text-[11px] text-gray-400">
-        <button type="button" className="inline-flex min-h-[44px] items-center px-4 underline md:min-h-0 md:px-0" onClick={() => backToHandoff("Signing was cancelled. Nothing was saved.")} data-testid="cancel-signing">Platino staff: cancel this signing</button>
+        <button type="button" className="inline-flex min-h-[44px] items-center px-4 underline md:min-h-0 md:px-0" onClick={cancelSigning} data-testid="cancel-signing">Platino staff: cancel this signing</button>
       </p>
 
       {/* Phones (below 768px): the Sign action stays at the bottom of the screen while the report is read and signed. It sits in the page flow

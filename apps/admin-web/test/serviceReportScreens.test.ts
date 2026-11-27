@@ -38,8 +38,10 @@ test("in-person signing screen: starts with the hand-over addressed to staff; on
   assert.match(signPage, /The customer has the device – start signing/);
   assert.match(signPage, /\/signing-session/);
   assert.match(signPage, /handoffConfirmed: true/);
-  // the customer step is only reached after the server has issued the session
-  assert.ok(signPage.indexOf('setStage("customer")') > signPage.indexOf("setSession(r.signingSession)"), "the customer step opens only after the session was issued");
+  // the customer step is only reached after the server has issued the signing credential (or, for an API without credentials, the session)
+  assert.ok(signPage.indexOf("await loadCustomerView(c)") > signPage.indexOf("saveSigningCredential(c)"), "the customer step opens only after the credential was issued and kept");
+  assert.ok(signPage.indexOf("await loadCustomerView(c)") > signPage.indexOf("releaseStaffLogin()"), "and only after the staff login was taken off the device");
+  assert.ok(signPage.lastIndexOf('setStage("customer")') > signPage.indexOf("setSession(r.signingSession)"), "the older path opens the customer step only after its session was issued");
   // step 2: addressed to the customer
   assert.match(signPage, /Please review and sign your service report/);
   assert.match(signPage, /<SignaturePad/);
@@ -191,7 +193,7 @@ test("page guard: a customer gets the portal and nothing else; staff get the sig
   // the signing screen is a full-screen staff page: after the permission check, shown without the menu
   assert.match(access, /export function isInPersonSigningPath/);
   assert.match(guard, /if \(isInPersonSigningPath\(pathname\)\) \{\s*return <div className="min-h-screen bg-gray-50">\{children\}<\/div>;/);
-  assert.ok(guard.indexOf("isInPersonSigningPath(pathname)") > guard.indexOf("if (matched && !canAccess(user.permissions, matched))"), "the permission check comes first");
+  assert.ok(guard.lastIndexOf("isInPersonSigningPath(pathname)") > guard.indexOf("if (matched && !canAccess(user.permissions, matched))"), "the permission check comes first");
 });
 
 test("customer, site and DG entry points: Customer and Site pages link to their reports, the unit page links each AMC order, and the list filters by them", () => {

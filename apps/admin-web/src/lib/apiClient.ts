@@ -58,6 +58,22 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 }
 
 /**
+ * A request made with a SIGNING CREDENTIAL (customer step of the in-person signing): `Authorization: Signing <credential>`, never the staff Bearer login.
+ * Unlike api(), a refusal does not bounce the page to the sign-in screen - the signing screen explains that the session has ended. The server accepts the
+ * credential only on three requests for one report (signing-view, sign, cancel).
+ */
+export async function apiWithSigningCredential<T>(path: string, credential: string, options: RequestInit = {}): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...options.headers, Authorization: `Signing ${credential}` },
+  });
+  const text = await res.text();
+  const body = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  if (!res.ok) throw new ApiRequestError(body.error ? JSON.stringify(body.error) : `Request failed: ${res.status}`, res.status, body);
+  return body as T;
+}
+
+/**
  * Fetches a protected file (signed report PDF, signature image) with the login token - an <a href> or <img src>
  * cannot send the Authorization header - and returns it as a Blob. Failures carry the server's message.
  */

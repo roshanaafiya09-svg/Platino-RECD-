@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { api, setToken, clearToken } from "@/lib/apiClient";
+import { STAFF_RELEASED_EVENT, clearSigningCredential } from "@/lib/signingCredential";
 import { useRouter } from "next/navigation";
 
 export interface UserSession {
@@ -98,8 +99,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     fetchSession();
   }, [fetchSession]);
 
+  // The in-person signing screen takes the staff login off the device while the customer signs (lib/signingCredential.ts): drop the signed-in user, no redirect.
+  useEffect(() => {
+    const onReleased = () => setUser(null);
+    window.addEventListener(STAFF_RELEASED_EVENT, onReleased);
+    return () => window.removeEventListener(STAFF_RELEASED_EVENT, onReleased);
+  }, []);
+
   const login = useCallback(async (token: string, orderNumber?: string) => {
     setLoading(true);
+    clearSigningCredential(); // signing in again as staff ends any customer signing session in this tab
     setToken(token);
     if (orderNumber && typeof window !== "undefined") {
       window.localStorage.setItem("recd_customer_ord", orderNumber);

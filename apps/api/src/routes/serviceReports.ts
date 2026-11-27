@@ -22,14 +22,15 @@ import {
   updateServiceReportSchema,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
-import { authenticate, type AuthenticatedRequest } from "../middleware/auth";
+import { authenticate, authLookup, type AuthenticatedRequest } from "../middleware/auth";
+import { SIGNING_CANCELLED_EVENT, SIGNING_INVALID_ERROR, SIGNING_STARTED_EVENT, signingCredentialGate, type SigningRequest } from "../middleware/signingCredential";
 import { asString, asOptionalString } from "../lib/params";
 import { managedRegionIds } from "../lib/regions";
 import { logComplaintEvent } from "../lib/ticketEvents";
 import { checkSignatureDataUrl } from "../lib/signatureImage";
 import { buildServiceReportPdf, type ServiceReportPdfInput } from "../lib/serviceReportPdf";
 import { getReportStorage, sha256Hex, type ReportStorage } from "../lib/reportStorage";
-import { checkSigningSession, issueSigningSession } from "../lib/signingSession";
+import { checkSigningSession, issueSigningCredential, issueSigningSession, newSigningSessionId } from "../lib/signingSession";
 
 /**
  * Digital service reports. Three kinds share ONE table, one state machine, one signature check, one PDF builder and one
@@ -65,12 +66,16 @@ import { checkSigningSession, issueSigningSession } from "../lib/signingSession"
  *  order and the covered unit give them for AMC reports.
  */
 export const serviceReportsRouter = Router();
-serviceReportsRouter.use(authenticate);
+// A request with `Authorization: Signing <credential>` is handled by the gate (three approved requests only, see middleware/signingCredential.ts).
+// Every other request - and every request of a signing credential that the gate did not take - needs a normal Bearer login, exactly as before.
+serviceReportsRouter.use(signingCredentialGate);
+serviceReportsRouter.use((req, res, next) => ((req as SigningRequest).signing ? next() : authenticate(req, res, next)));
 
 const MAX_NUMBER_ATTEMPTS = 3;
 const NOT_FOUND = { error: "Service report not found" };
 const EVENT_UPDATED = "service_report_updated";
-const EVENT_SIGNING_STARTED = "service_report_signing_started";
+const EVENT_SIGNING_STARTED = SIGNING_STARTED_EVENT;
+const EVENT_SIGNING_CANCELLED = SIGNING_CANCELLED_EVENT;
 const amcRef = (amcOrderId: string) => `AMC-${amcOrderId.slice(-6).toUpperCase()}`;
 
 // ---------------------------------------------------------------------------
@@ -263,9 +268,17 @@ async function event(req: AuthenticatedRequest, r: ReportRow, type: string, toVa
   } catch (err) {
     console.error("Failed to log service report event", err instanceof Error ? err.name : "unknown");
   }
-  if (r.complaintId && type !== EVENT_UPDATED && type !== EVENT_SIGNING_STARTED) {
+  if (r.complaintId && type !== EVENT_UPDATED && type !== EVENT_SIGNING_STARTED && type !== EVENT_SIGNING_CANCELLED) {
     await logComplaintEvent({ complaintId: r.complaintId, type: type as never, fromValue: fromValue ?? null, toValue, actorId: req.auth!.userId, detail });
   }
+}
+
+/** Like `event`, but a failure to write is NOT swallowed: used for the records that decide whether a signing credential is live (started / cancelled). */
+async function signingSessionEvent(req: AuthenticatedRequest, r: ReportRow, type: string, extra: Record<string, unknown>) {
+  const detail = { reportId: r.id, reportNumber: r.reportNumber, kind: r.kind, version: r.version, amcOrderId: r.amcOrderId, unitId: r.unitId, ...extra } as Prisma.InputJsonValue;
+  await prisma.serviceReportEvent.create({
+    data: { reportId: r.id, type, fromValue: SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, toValue: SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, actorId: req.auth!.userId, detail },
+  });
 }
 
 const staleVersion = (res: Response) =>
@@ -922,8 +935,13 @@ serviceReportsRouter.post("/:id/signing-session", async (req: AuthenticatedReque
     return res.status(409).json({ error: "This report is not in a signable state. Take it back to draft and submit it again.", code: "REPORT_NOT_SIGNABLE" });
   }
   const session = issueSigningSession({ reportId: report.id, version: report.version, staffId: req.auth!.userId });
-  await event(req, report, EVENT_SIGNING_STARTED, SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, SERVICE_REPORT_STATUS.AWAITING_SIGNATURE, { mode: "in_person", handoffConfirmed: true, expiresAt: session.expiresAt.toISOString() });
-  res.json({ signingSession: session.token, expiresAt: session.expiresAt.toISOString(), version: report.version });
+  // The signing credential for the customer step (the staff login is not needed on the device after this). Its session id is recorded in the audit event
+  // below; that record is what makes it the live session, so it is written strictly (a failure stops the start instead of leaving a credential that cannot work).
+  const staffAccount = await authLookup.load(req.auth!.userId);
+  const sessionId = newSigningSessionId();
+  const credential = issueSigningCredential({ reportId: report.id, version: report.version, staffId: req.auth!.userId, tokenVersion: staffAccount?.tokenVersion ?? 0, sessionId });
+  await signingSessionEvent(req, report, EVENT_SIGNING_STARTED, { mode: "in_person", handoffConfirmed: true, expiresAt: session.expiresAt.toISOString(), sessionId });
+  res.json({ signingSession: session.token, signingCredential: credential.token, expiresAt: credential.expiresAt.toISOString(), version: report.version });
 });
 
 /**
@@ -931,7 +949,7 @@ serviceReportsRouter.post("/:id/signing-session", async (req: AuthenticatedReque
  * the signing session, the version that was shown, the name the customer typed, the drawn signature and the approval tick. The signature checks,
  * the content-hash check, the PDF, the stored files and the final immutability are exactly those of the earlier flow.
  */
-serviceReportsRouter.post("/:id/sign", async (req: AuthenticatedRequest, res) => {
+serviceReportsRouter.post("/:id/sign", async (req: SigningRequest, res) => {
   // A customer login cannot sign any more - checked before anything about the report is revealed.
   if (req.auth!.customerId) {
     return res.status(403).json({ error: "Service reports are signed in person, on a Platino staff device. Please ask the Platino engineer to open the signing screen.", code: "IN_PERSON_ONLY" });
@@ -952,9 +970,17 @@ serviceReportsRouter.post("/:id/sign", async (req: AuthenticatedRequest, res) =>
   if (parsed.data.version !== report.version) {
     return res.status(409).json({ error: "This report changed after it was shown to the customer. Please show the latest version before signing.", code: "STALE_VERSION" });
   }
-  // The signing session must be the one this staff login started, for this report and this version, and still fresh.
-  const session = checkSigningSession(parsed.data.signingSession, { reportId: report.id, version: report.version, staffId: req.auth!.userId });
-  if (!session.ok) return res.status(403).json({ error: SESSION_MESSAGES[session.reason] ?? SESSION_MESSAGES.malformed, code: "SIGNING_SESSION_INVALID" });
+  if (req.signing) {
+    // Signing credential (customer step): the gate already proved it is genuine, unexpired, the live session, for THIS report, with the staff account in
+    // good standing. Here: the version it was issued for must be the version being signed, and the copy in the body must be the same credential.
+    if (req.signing.claims.version !== report.version || parsed.data.signingSession !== req.signing.token) {
+      return res.status(401).json(SIGNING_INVALID_ERROR);
+    }
+  } else {
+    // Signing session (staff login): it must be the one this staff login started, for this report and this version, and still fresh.
+    const session = checkSigningSession(parsed.data.signingSession, { reportId: report.id, version: report.version, staffId: req.auth!.userId });
+    if (!session.ok) return res.status(403).json({ error: SESSION_MESSAGES[session.reason] ?? SESSION_MESSAGES.malformed, code: "SIGNING_SESSION_INVALID" });
+  }
 
   // The signer is the customer's representative: never the logged-in member of staff and never the engineer who wrote the report.
   const staffUser = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { name: true } });
@@ -1043,8 +1069,72 @@ serviceReportsRouter.post("/:id/sign", async (req: AuthenticatedRequest, res) =>
     signerName: parsed.data.signerName,
     mode: "in_person",
     capturedById: req.auth!.userId,
+    ...(req.signing ? { signingSessionId: req.signing.claims.sessionId, viaSigningCredential: true } : {}),
   });
+  // The customer step has no staff login: it gets only the confirmation it needs, not the whole report record.
+  if (req.signing) {
+    return res.json({ id: fresh.id, reportNumber: fresh.reportNumber, status: fresh.status, version: fresh.version, signedAt: fresh.signedAt, signerName: fresh.signerName });
+  }
   res.json(toApi(fresh));
+});
+
+// ---------------------------------------------------------------------------
+// Customer step of the in-person signing (signing credential only, see middleware/signingCredential.ts)
+// ---------------------------------------------------------------------------
+
+/** What the customer is shown and nothing more: no history, no staff-only fields, no file references. Same wording and shape as the staff detail view for these fields. */
+async function signingView(report: ReportRow) {
+  const [customer, site, unit] = await Promise.all([
+    prisma.customer.findUnique({ where: { id: report.customerId }, select: { name: true } }),
+    report.siteId ? prisma.site.findUnique({ where: { id: report.siteId }, select: { companyName: true, address: true, dgModel: true, dgCapacityKva: true } }) : null,
+    report.unitId ? prisma.recdUnit.findUnique({ where: { id: report.unitId }, select: { serialNo: true, product: { select: { name: true, model: true } } } }) : null,
+  ]);
+  return {
+    id: report.id,
+    reportNumber: report.reportNumber,
+    kind: report.kind,
+    ticketNumber: report.complaint?.ticketNumber ?? null,
+    amc: report.amcOrder ? { ref: amcRef(report.amcOrder.id) } : null,
+    status: report.status,
+    version: report.version,
+    visitDate: dateOnly(report.visitDate),
+    workPerformed: report.workPerformed,
+    findings: report.findings,
+    resolution: report.resolution,
+    partsUsed: report.partsUsed,
+    remarks: report.remarks,
+    engineer: { name: report.createdBy?.name ?? "" },
+    customerName: customer?.name ?? null,
+    site: site ? { name: site.companyName, address: site.address, dgModel: site.dgModel, dgCapacityKva: site.dgCapacityKva } : null,
+    unit: report.unitId || report.unitSerialNo ? { serialNo: report.unitSerialNo ?? unit?.serialNo ?? null, model: unit?.product ? `${unit.product.name} (${unit.product.model})` : null } : null,
+  };
+}
+
+/** The signing credential's way to read the report it was issued for. Only while the report is still exactly what was submitted and is awaiting the signature. */
+serviceReportsRouter.get("/:id/signing-view", async (req: SigningRequest, res) => {
+  if (!req.signing) return res.status(403).json({ error: "This request needs a signing credential.", code: "SIGNING_CREDENTIAL_REQUIRED" });
+  const found = await loadWithAccess(req, res, asString(req.params.id));
+  if (!found) return;
+  const { report } = found;
+  if (!found.staff.write) return res.status(403).json({ error: "You cannot collect the signature for this report" });
+  if (report.status !== SERVICE_REPORT_STATUS.AWAITING_SIGNATURE) {
+    return res.status(409).json({ error: "This report is not waiting for a signature.", code: "BAD_TRANSITION" });
+  }
+  if (req.signing.claims.version !== report.version) return res.status(401).json(SIGNING_INVALID_ERROR);
+  if (serviceReportMissingFields(report).length || !report.contentHash || report.contentHash !== reportContentHash(report)) {
+    return res.status(409).json({ error: "This report is not in a signable state. Please hand the device back to Platino staff.", code: "REPORT_NOT_SIGNABLE" });
+  }
+  res.setHeader("Cache-Control", "private, no-store");
+  res.json(await signingView(report));
+});
+
+/** Ends the signing session at once (the credential stops working immediately). Harmless to anyone: it only closes the signing. */
+serviceReportsRouter.post("/:id/signing-session/cancel", async (req: SigningRequest, res) => {
+  if (!req.signing) return res.status(403).json({ error: "This request needs a signing credential.", code: "SIGNING_CREDENTIAL_REQUIRED" });
+  const report = await prisma.serviceReport.findUnique({ where: { id: asString(req.params.id) }, include: reportInclude });
+  if (!report) return res.status(404).json(NOT_FOUND);
+  await signingSessionEvent(req, report, EVENT_SIGNING_CANCELLED, { mode: "in_person", sessionId: req.signing.claims.sessionId, viaSigningCredential: true });
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
