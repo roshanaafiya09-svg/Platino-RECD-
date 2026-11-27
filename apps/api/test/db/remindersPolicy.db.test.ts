@@ -16,6 +16,7 @@
  * singleton row is changed for the run and restored; the seeded Management / Owner users are only ever deactivated for one test and put back.
  */
 import "dotenv/config";
+import { allowedByTestOverride, expectedTestDatabase } from "../helpers/isolatedDb";
 import test, { describe, before, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -34,7 +35,7 @@ function pointsAtIsolatedDb(raw: string | undefined): boolean {
   }
 }
 
-const isolated = pointsAtIsolatedDb(process.env.DATABASE_URL) && pointsAtIsolatedDb(process.env.DIRECT_URL) && !!process.env.JWT_SECRET;
+const isolated = (pointsAtIsolatedDb(process.env.DATABASE_URL) || allowedByTestOverride(process.env.DATABASE_URL)) && (pointsAtIsolatedDb(process.env.DIRECT_URL) || allowedByTestOverride(process.env.DIRECT_URL)) && !!process.env.JWT_SECRET;
 const skip = isolated
   ? false
   : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test), or JWT_SECRET is missing - refusing to touch any database";
@@ -130,7 +131,7 @@ describe("approved R6 reminder and escalation policy against the real test datab
     console.error = () => {};
     ({ prisma } = await import("../../src/lib/prisma"));
     const [{ db }] = await prisma.$queryRaw`select current_database() as db`;
-    assert.equal(db, ISOLATED.database, "connected to the wrong database - aborting");
+    assert.equal(db, expectedTestDatabase(ISOLATED.database), "connected to the wrong database - aborting");
     ({ signToken } = await import("../../src/lib/jwt"));
     ({ runReminderJob } = await import("../../src/lib/reminders"));
     ({ providersByChannel: providers } = await import("../../src/services/notifications/providers"));

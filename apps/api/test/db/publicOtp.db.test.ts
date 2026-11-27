@@ -8,6 +8,7 @@
  * can leave it. All serials and phone numbers are synthetic. Run with:  npm run test:db --workspace=apps/api
  */
 import "dotenv/config";
+import { allowedByTestOverride, expectedTestDatabase } from "../helpers/isolatedDb";
 import test, { describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -27,7 +28,7 @@ function pointsAtIsolatedDb(raw: string | undefined): boolean {
   }
 }
 
-const isolated = pointsAtIsolatedDb(process.env.DATABASE_URL) && pointsAtIsolatedDb(process.env.DIRECT_URL) && !!process.env.JWT_SECRET;
+const isolated = (pointsAtIsolatedDb(process.env.DATABASE_URL) || allowedByTestOverride(process.env.DATABASE_URL)) && (pointsAtIsolatedDb(process.env.DIRECT_URL) || allowedByTestOverride(process.env.DIRECT_URL)) && !!process.env.JWT_SECRET;
 const skip = isolated
   ? false
   : "DATABASE_URL / DIRECT_URL are not both the isolated local test database (localhost:5434/platino_test), or JWT_SECRET is missing - refusing to touch any database";describe("public complaint OTP against the real test database", { skip }, () => {
@@ -88,7 +89,7 @@ const skip = isolated
     console.error = () => {};
     ({ prisma } = await import("../../src/lib/prisma"));
     const [{ db }] = await prisma.$queryRaw`select current_database() as db`;
-    assert.equal(db, ISOLATED.database, "connected to the wrong database - aborting");
+    assert.equal(db, expectedTestDatabase(ISOLATED.database), "connected to the wrong database - aborting");
     await prisma.ipRateLimit.deleteMany({}); // disposable DB only
 
     for (const k of ["OTP_DEV_ECHO", "PUBLIC_OTP_DEV_ECHO", "VERCEL", "VERCEL_ENV"]) delete process.env[k];

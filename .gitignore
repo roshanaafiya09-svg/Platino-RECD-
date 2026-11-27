@@ -12,6 +12,9 @@ coverage/
 *.tsbuildinfo
 .claude/settings.local.json
 
+/apps/api/.vercel/
+
 # Environment files may hold secrets - never commit (the example files are the only exception)
 .env.*
 !.env.example
+/apps/admin-web/.vercel/
