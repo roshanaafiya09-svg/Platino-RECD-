@@ -325,6 +325,8 @@ export default function AmcOrdersPage() {
         <div className="px-5 py-4 border-b border-gray-100">
           <h2 className="text-sm font-semibold">AMC Order List</h2>
         </div>
+        {/* Laptops and desktops (768px and wider): the table, exactly as before. Phones get the card list below. */}
+        <div className="table-desktop">
         <div className="table-scroll">
           <table className="w-full border-collapse text-sm">
             <thead>
@@ -427,6 +429,90 @@ export default function AmcOrdersPage() {
               )}
             </tbody>
           </table>
+        </div>
+        </div>
+
+        {/* Phones: one card per order, with the same details and the same actions as the table row. */}
+        <div className="cards-mobile p-3" data-testid="amc-mobile-cards">
+          {loading && <div className="card p-6 text-center text-sm text-gray-400" data-testid="amc-loading-card">Loading AMC orders…</div>}
+          {!loading && orders.length === 0 && (
+            <div className="card p-6 text-center text-sm text-gray-400">
+              No AMC orders found.
+              <br />
+              <span className="text-xs">Create a new AMC order to get started.</span>
+            </div>
+          )}
+          {orders.map((o) => {
+            const cleared = !!o.expiryReminderClearedAt;
+            return (
+              <div key={o.id} className="data-card" data-testid={`amc-card-${o.poNo}`}>
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <span className="font-mono text-sm font-semibold text-gray-900">{o.poNo}</span>
+                  <span className={statusPill(o.status)}>{pretty(o.status)}</span>
+                </div>
+                <p className="text-sm font-semibold text-gray-900">{o.customer.name}</p>
+                <p className="text-xs text-gray-500">{o.location} · {o.item}</p>
+                <div className="mt-2">
+                  <div className="data-card-row"><span className="label">PO date</span><span className="value">{formatDay(o.poDate)}</span></div>
+                  <div className="data-card-row">
+                    <span className="label">AMC period</span>
+                    <span className="value" data-testid={`amc-card-period-${o.poNo}`}>
+                      {formatDay(o.startDate)} to {formatDay(o.endDate)}
+                      {o.datesSource === "legacy_po_date" && <span className="block text-[10px] text-gray-400">derived from PO date</span>}
+                    </span>
+                  </div>
+                  <div className="data-card-row"><span className="label">Type</span><span className="value">{AMC_TYPE_LABELS[o.amcType] ?? o.amcType}</span></div>
+                  <div className="data-card-row"><span className="label">Qty · visits / year</span><span className="value">{o.qty} · {o.amcFrequencyPerYear}</span></div>
+                  <div className="data-card-row">
+                    <span className="label">RECD serial</span>
+                    <span className="value">
+                      {o.units.length === 0 ? (
+                        <span className="text-xs text-gray-400">No units linked</span>
+                      ) : (
+                        <span className="flex flex-col items-end gap-0.5">
+                          {o.units.map(({ unit }) => (
+                            <Link key={unit.id} href={`/recd-units/${unit.id}`} className="font-mono text-xs hover:underline">
+                              {unit.serialNo ?? "Serial not entered"}
+                            </Link>
+                          ))}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="data-card-row" data-testid={`amc-card-contract-${o.poNo}`}>
+                    <span className="label">Contract</span>
+                    <span className="value">
+                      <span className={contractStatusPill(o.contractStatus)}>{contractStatusLabel(o.contractStatus)}</span>
+                      <span className="block text-[10px] text-gray-500 mt-0.5">{daysText(o.contractStatus, o.daysRemaining)}</span>
+                      {cleared && <span className="block text-[10px] font-semibold text-emerald-600">AMC Acquired</span>}
+                      {o.renewalCount > 0 && <span className="block text-[10px] text-gray-500">{o.renewalCount} renewal/change{o.renewalCount === 1 ? "" : "s"}</span>}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Link
+                    href={`/service-reports?amcOrderId=${o.id}`}
+                    data-testid={`amc-card-reports-link-${o.poNo}`}
+                    className="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-gray-300 px-3 py-2 text-center text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                  >
+                    Service reports
+                  </Link>
+                  <button onClick={() => setDialog({ kind: "renew", order: o })} className="min-h-[44px] flex-1 rounded-lg border border-indigo-300 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50" data-testid={`amc-card-renew-${o.poNo}`}>Renew</button>
+                  <button onClick={() => setDialog({ kind: "edit", order: o })} className="min-h-[44px] flex-1 rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50" data-testid={`amc-card-edit-${o.poNo}`}>Edit</button>
+                  <button onClick={() => setDialog({ kind: "history", order: o })} className="min-h-[44px] flex-1 rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50" data-testid={`amc-card-history-${o.poNo}`}>History</button>
+                  {!cleared && (
+                    <button
+                      onClick={() => clearReminder(o.id)}
+                      disabled={clearingId === o.id}
+                      className="min-h-[44px] flex-1 rounded-lg border border-emerald-300 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                    >
+                      {clearingId === o.id ? "Saving…" : "AMC Acquired"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 

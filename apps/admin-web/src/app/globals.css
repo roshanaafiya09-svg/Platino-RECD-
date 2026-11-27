@@ -222,6 +222,20 @@ body {
   color: #9AA5B1;
 }
 
+/* Phones only (below 768px, the same breakpoint as the table-to-card switch; 767.98px so a fractional viewport
+   width such as 767.5 cannot fall in the gap between this rule and min-width: 768px): form fields are 16px.
+   Phone browsers (iPhone Safari in particular) zoom the whole page in when a field smaller than 16px
+   is tapped. Laptops and desktops keep their current field sizes. Tick boxes, radio buttons and the
+   other non-text inputs are left alone. (select and textarea carry a :not() so this rule is more specific
+   than the class-based sizes such as .field and text-sm; data-keep-font opts a field out.) */
+@media screen and (max-width: 767.98px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]),
+  select:not([data-keep-font]),
+  textarea:not([data-keep-font]) {
+    font-size: 16px;
+  }
+}
+
 /* ── Mobile bottom navigation ─────────────────────────────────────────── */
 
 .bottom-nav {

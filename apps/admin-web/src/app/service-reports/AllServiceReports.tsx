@@ -6,7 +6,8 @@ import { useSearchParams } from "next/navigation";
 import { SERVICE_REPORT_KIND, SERVICE_REPORT_STATUS, SERVICE_REPORT_STATUS_LABELS, type ServiceReportStatus } from "@recd/shared";
 import { api } from "@/lib/apiClient";
 import { apiErrorMessage } from "@/lib/apiError";
-import { downloadReportPdf } from "@/lib/reportFiles";
+import { downloadReportPdf, withPdfFallbackHint } from "@/lib/reportFiles";
+import SharePdfButton from "@/components/SharePdfButton";
 import { reportKindLabel, reportKindPill, reportStatusPill } from "@/lib/serviceReportUi";
 import DirectReportForm from "./DirectReportForm";
 import { useAuth } from "@/components/AuthContext";
@@ -76,7 +77,7 @@ export default function AllServiceReports() {
     try {
       await downloadReportPdf(r.id, r.reportNumber);
     } catch (err) {
-      setDownloadError(apiErrorMessage(err, "Could not download the report."));
+      setDownloadError(withPdfFallbackHint(apiErrorMessage(err, "Could not download the report.")));
     }
   }
 
@@ -161,7 +162,7 @@ export default function AllServiceReports() {
       )}
 
       {rows && rows.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white table-desktop">
           <table className="min-w-full text-sm" data-testid="reports-table">
             <thead className="bg-gray-50 text-left text-[11px] uppercase text-gray-500">
               <tr>
@@ -203,6 +204,41 @@ export default function AllServiceReports() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Phones: one card per report - status, PDF and Open are all on the card, so nothing needs sideways scrolling. */}
+      {rows && rows.length > 0 && (
+        <div className="cards-mobile" data-testid="reports-mobile-cards">
+          {rows.map((r) => (
+            <div key={r.id} className="data-card" data-testid={`report-card-${r.reportNumber}`}>
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <Link href={`/service-reports/${r.id}`} className="font-mono text-sm font-bold text-[var(--theme-primary)] hover:underline">{r.reportNumber}</Link>
+                <span className={reportStatusPill(r.status)}>{SERVICE_REPORT_STATUS_LABELS[r.status] ?? r.status}</span>
+              </div>
+              <p className="flex flex-wrap items-center gap-2">
+                <span className={reportKindPill(r.kind)}>{reportKindLabel(r.kind)}</span>
+                <span className="text-xs text-gray-500">{reportSource(r)}</span>
+              </p>
+              <p className="mt-2 text-sm font-semibold text-gray-900">{r.customerName ?? "-"}</p>
+              <p className="text-xs text-gray-500">{r.siteName ?? "No site"}</p>
+              <div className="mt-2">
+                <div className="data-card-row"><span className="label">RECD serial</span><span className="value font-mono text-xs">{r.unitSerial ?? r.unitSerialNo ?? (r.kind === "direct" ? "Not recorded" : "Serial not entered")}</span></div>
+                <div className="data-card-row"><span className="label">Visit</span><span className="value">{r.visitDate} · {r.engineer.name}</span></div>
+              </div>
+              <div className="mt-3 flex gap-2">
+                {r.pdfAvailable && (
+                  <button onClick={() => download(r)} className="flex-1 rounded-lg border border-gray-300 min-h-[44px] px-3 py-2 text-xs font-semibold text-[var(--theme-accent)] hover:bg-gray-50">
+                    PDF
+                  </button>
+                )}
+                {r.pdfAvailable && (
+                  <SharePdfButton reportId={r.id} reportNumber={r.reportNumber} label="Share" wrapperClassName="flex-1" className="w-full rounded-lg border border-gray-300 min-h-[44px] px-3 py-2 text-xs font-semibold text-[var(--theme-accent)] hover:bg-gray-50" />
+                )}
+                <Link href={`/service-reports/${r.id}`} className="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-gray-300 px-3 py-2 text-center text-xs font-semibold text-gray-700 hover:bg-gray-50">Open</Link>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

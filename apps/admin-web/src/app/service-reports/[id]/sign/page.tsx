@@ -7,7 +7,8 @@ import { SERVICE_REPORT_LIMITS, SERVICE_REPORT_STATUS, type ServiceReportStatus 
 import { api, ApiRequestError } from "@/lib/apiClient";
 import { apiErrorMessage } from "@/lib/apiError";
 import SignaturePad from "@/components/SignaturePad";
-import { downloadReportPdf, openReportPdf } from "@/lib/reportFiles";
+import { downloadReportPdf, openReportPdf, withPdfFallbackHint } from "@/lib/reportFiles";
+import SharePdfButton from "@/components/SharePdfButton";
 
 interface ReportDetail {
   id: string;
@@ -133,10 +134,10 @@ export default function InPersonSigningPage() {
     setBusy("download");
     setError(null);
     try {
-      if (open) await openReportPdf(report.id);
+      if (open) await openReportPdf(report.id, report.reportNumber);
       else await downloadReportPdf(report.id, report.reportNumber);
     } catch (err) {
-      setError(apiErrorMessage(err, "The signed report could not be downloaded."));
+      setError(withPdfFallbackHint(apiErrorMessage(err, "The signed report could not be downloaded.")));
     } finally {
       setBusy(null);
     }
@@ -155,6 +156,12 @@ export default function InPersonSigningPage() {
   if (!report) return <p className="p-6 text-sm text-gray-500" data-testid="signing-loading">Loading report…</p>;
 
   const canSignNow = !!signatureImage && signerName.trim().length >= SERVICE_REPORT_LIMITS.SIGNER_NAME_MIN && confirm && busy === null;
+  // Shown above the phone Sign bar: the next thing the customer still has to do.
+  const signHint =
+    signerName.trim().length < SERVICE_REPORT_LIMITS.SIGNER_NAME_MIN ? "Type your full name"
+    : !signatureImage ? "Draw your signature in the box"
+    : !confirm ? "Tick the approval box"
+    : "Ready to sign";
 
   // ---- Not in a state that can be signed in person
   if (stage !== "done" && report.status !== SERVICE_REPORT_STATUS.AWAITING_SIGNATURE) {
@@ -199,7 +206,7 @@ export default function InPersonSigningPage() {
           <button onClick={startSigning} disabled={busy !== null} className="btn-primary px-5 py-3 text-sm font-semibold disabled:opacity-50" data-testid="start-signing">
             {busy === "start" ? "Starting…" : "The customer has the device – start signing"}
           </button>
-          <Link href={backHref} className="text-sm font-medium text-gray-600 hover:underline">Back to the report</Link>
+          <Link href={backHref} className="inline-flex min-h-[44px] items-center text-sm font-medium text-gray-600 hover:underline md:min-h-0">Back to the report</Link>
         </div>
       </div>
     );
@@ -219,16 +226,17 @@ export default function InPersonSigningPage() {
         </div>
         {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
         <div className="flex flex-wrap gap-3">
-          <button onClick={() => download(false)} disabled={busy !== null || !report.pdfAvailable} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
+          <button onClick={() => download(false)} disabled={busy !== null || !report.pdfAvailable} className="btn-primary px-4 py-3 text-sm disabled:opacity-50 md:py-2">
             {busy === "download" ? "Preparing…" : "Download signed PDF"}
           </button>
-          <button onClick={() => download(true)} disabled={busy !== null || !report.pdfAvailable} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 disabled:opacity-50">
+          <button onClick={() => download(true)} disabled={busy !== null || !report.pdfAvailable} className="rounded-lg border border-gray-300 bg-white px-4 py-3 text-sm font-medium text-gray-700 disabled:opacity-50 md:py-2">
             Open in a new tab
           </button>
+          <SharePdfButton reportId={report.id} reportNumber={report.reportNumber} disabled={busy !== null || !report.pdfAvailable} className="rounded-lg border border-gray-300 bg-white px-4 py-3 text-sm font-medium text-gray-700 disabled:opacity-50" />
         </div>
         <div className="flex flex-wrap gap-4 text-sm font-medium">
-          <Link href={backHref} className="text-[var(--theme-accent)] hover:underline">Back to the report</Link>
-          <Link href="/service-reports" className="text-[var(--theme-accent)] hover:underline">All service reports</Link>
+          <Link href={backHref} className="inline-flex min-h-[44px] items-center text-[var(--theme-accent)] hover:underline md:min-h-0">Back to the report</Link>
+          <Link href="/service-reports" className="inline-flex min-h-[44px] items-center text-[var(--theme-accent)] hover:underline md:min-h-0">All service reports</Link>
         </div>
       </div>
     );
@@ -292,19 +300,32 @@ export default function InPersonSigningPage() {
           <p className="mt-1 text-[11px] text-gray-400">Type your own name. It will be printed on the signed report.</p>
         </div>
         <SignaturePad onChange={setSignatureImage} disabled={busy === "sign"} />
-        <label className="flex items-start gap-2 text-sm text-gray-700">
-          <input type="checkbox" className="mt-1" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} data-testid="confirm-approve" />
+        <label className="flex min-h-[44px] items-start gap-2 text-sm text-gray-700 md:min-h-0">
+          <input type="checkbox" className="mt-1 h-6 w-6 shrink-0 md:h-auto md:w-auto" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} data-testid="confirm-approve" />
           <span>I have reviewed this report and approve it.</span>
         </label>
         {error && <p role="alert" data-testid="signing-error-message" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
-        <button onClick={signNow} disabled={!canSignNow} className="btn-primary px-5 py-3 text-sm font-semibold disabled:opacity-50" data-testid="sign-and-finalise">
+        <button onClick={signNow} disabled={!canSignNow} className="btn-primary hidden px-5 py-3 text-sm font-semibold disabled:opacity-50 md:inline-block" data-testid="sign-and-finalise">
           {busy === "sign" ? "Signing…" : "Sign and finalise"}
         </button>
       </section>
 
       <p className="text-center text-[11px] text-gray-400">
-        <button type="button" className="underline" onClick={() => backToHandoff("Signing was cancelled. Nothing was saved.")} data-testid="cancel-signing">Platino staff: cancel this signing</button>
+        <button type="button" className="inline-flex min-h-[44px] items-center px-4 underline md:min-h-0 md:px-0" onClick={() => backToHandoff("Signing was cancelled. Nothing was saved.")} data-testid="cancel-signing">Platino staff: cancel this signing</button>
       </p>
+
+      {/* Phones (below 768px): the Sign action stays at the bottom of the screen while the report is read and signed. It sits in the page flow
+          (sticky, not fixed), so it never covers the report or the form, and it does the same thing as the button above (same rule to enable it). */}
+      <div
+        className="sticky bottom-0 z-10 -mx-4 border-t border-gray-200 bg-white/95 px-4 pt-3 backdrop-blur sm:-mx-6 sm:px-6 md:hidden"
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        data-testid="sign-bar-mobile"
+      >
+        <p className="mb-2 text-center text-[11px] text-gray-500" aria-live="polite" data-testid="sign-bar-hint">{signHint}</p>
+        <button onClick={signNow} disabled={!canSignNow} className="btn-primary min-h-[48px] w-full px-5 text-sm font-semibold disabled:opacity-50" data-testid="sign-and-finalise-mobile">
+          {busy === "sign" ? "Signing…" : "Sign and finalise"}
+        </button>
+      </div>
     </div>
   );
 }

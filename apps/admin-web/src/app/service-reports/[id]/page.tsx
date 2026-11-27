@@ -6,7 +6,8 @@ import { useParams, useRouter } from "next/navigation";
 import { SERVICE_REPORT_LIMITS, SERVICE_REPORT_STATUS, SERVICE_REPORT_STATUS_LABELS, serviceReportMissingFields, type ServiceReportStatus } from "@recd/shared";
 import { api, apiBlob, ApiRequestError } from "@/lib/apiClient";
 import { apiErrorMessage } from "@/lib/apiError";
-import { downloadReportPdf, openReportPdf } from "@/lib/reportFiles";
+import { downloadReportPdf, openReportPdf, withPdfFallbackHint } from "@/lib/reportFiles";
+import SharePdfButton from "@/components/SharePdfButton";
 import { reportStatusPill } from "@/lib/serviceReportUi";
 
 interface ReportDetail {
@@ -138,10 +139,10 @@ export default function ServiceReportPage() {
     setMessage(null);
     setBusy("download");
     try {
-      if (open) await openReportPdf(report!.id);
+      if (open) await openReportPdf(report!.id, report!.reportNumber);
       else await downloadReportPdf(report!.id, report!.reportNumber);
     } catch (err) {
-      setMessage({ kind: "error", text: apiErrorMessage(err, "The signed report could not be downloaded.") });
+      setMessage({ kind: "error", text: withPdfFallbackHint(apiErrorMessage(err, "The signed report could not be downloaded.")) });
     } finally {
       setBusy(null);
     }
@@ -298,6 +299,7 @@ export default function ServiceReportPage() {
             <button onClick={() => download(true)} disabled={busy !== null || !report.pdfAvailable} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 disabled:opacity-50">
               Open in a new tab
             </button>
+            <SharePdfButton reportId={report.id} reportNumber={report.reportNumber} disabled={busy !== null || !report.pdfAvailable} className="rounded-lg border border-gray-300 bg-white px-4 py-3 text-sm font-medium text-gray-700 disabled:opacity-50" />
           </div>
         </section>
       )}
@@ -320,6 +322,7 @@ export default function ServiceReportPage() {
             <button onClick={() => download(true)} disabled={busy !== null || !report.pdfAvailable} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 disabled:opacity-50">
               Open in a new tab
             </button>
+            <SharePdfButton reportId={report.id} reportNumber={report.reportNumber} disabled={busy !== null || !report.pdfAvailable} className="rounded-lg border border-gray-300 bg-white px-4 py-3 text-sm font-medium text-gray-700 disabled:opacity-50" />
           </div>
         </section>
       )}
