@@ -17,6 +17,11 @@ interface ProductDetail {
   dimensions: string | null;
   weightKg: string | null;
   silencerType: number | null;
+  itemCode: string | null;
+  description: string | null;
+  hsnSacType: string | null;
+  hsnSacNo: string | null;
+  unitOfMeasure: string | null;
 }
 
 const SHAPE_LABELS: Record<string, string> = {
@@ -91,6 +96,23 @@ export default function ProductDetailPage() {
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <section className="card p-5 space-y-2" data-testid="item-catalogue-details">
+          <h2 className="text-sm font-semibold">Item details</h2>
+          <div className="data-card-row">
+            <span className="label">Item code</span>
+            <span className="value font-mono text-xs">{product.itemCode ?? "-"}</span>
+          </div>
+          {product.description && <p className="whitespace-pre-wrap text-sm text-gray-700">{product.description}</p>}
+          <div className="data-card-row">
+            <span className="label">HSN/SAC</span>
+            <span className="value">{product.hsnSacType ?? "-"}{product.hsnSacNo ? ` · ${product.hsnSacNo}` : ""}</span>
+          </div>
+          <div className="data-card-row">
+            <span className="label">Unit</span>
+            <span className="value">{product.unitOfMeasure ?? "-"}</span>
+          </div>
+        </section>
+
         <section className="card p-5 space-y-2">
           <h2 className="text-sm font-semibold">Specification</h2>
           {product.ratingSpec && <p className="text-sm text-gray-700">{product.ratingSpec}</p>}

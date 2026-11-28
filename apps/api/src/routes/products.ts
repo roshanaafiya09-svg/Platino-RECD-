@@ -7,6 +7,19 @@ import { asString } from "../lib/params";
 export const productsRouter = Router();
 productsRouter.use(authenticate);
 
+const ITEM_CODE_TAKEN = "An item with that Item Code already exists";
+
+/** The item that already uses this Item Code, ignoring case (and `exceptId`, when editing). Item Code is stored trimmed by the schema. */
+function itemCodeOwner(itemCode: string, exceptId?: string) {
+  return prisma.product.findFirst({
+    where: { itemCode: { equals: itemCode, mode: "insensitive" }, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    select: { id: true },
+  });
+}
+
+/** A unique-index violation raised by the database itself (two people saving the same code or model at the same moment). */
+const isUniqueViolation = (err: unknown) => !!err && typeof err === "object" && (err as { code?: unknown }).code === "P2002";
+
 // Read access: anyone who can place an order needs to pick a product.
 productsRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (_req, res) => {
   const products = await prisma.product.findMany({ orderBy: { model: "asc" } });
@@ -27,21 +40,32 @@ productsRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async 
   const modelTaken = await prisma.product.findUnique({ where: { model: parsed.data.model } });
   if (modelTaken) return res.status(400).json({ error: "A product with that model already exists" });
 
-  const product = await prisma.product.create({
-    data: {
-      name: parsed.data.name,
-      model: parsed.data.model,
-      ratingSpec: parsed.data.ratingSpec,
-      capacityKva: parsed.data.capacityKva,
-      warrantyMonths: parsed.data.warrantyMonths,
-      shape: parsed.data.shape,
-      dimensions: parsed.data.dimensions,
-      weightKg: parsed.data.weightKg,
-      silencerType: parsed.data.silencerType,
-    },
-  });
+  if (parsed.data.itemCode && (await itemCodeOwner(parsed.data.itemCode))) return res.status(400).json({ error: ITEM_CODE_TAKEN });
 
-  res.status(201).json(product);
+  try {
+    const product = await prisma.product.create({
+      data: {
+        name: parsed.data.name,
+        model: parsed.data.model,
+        ratingSpec: parsed.data.ratingSpec,
+        capacityKva: parsed.data.capacityKva,
+        warrantyMonths: parsed.data.warrantyMonths,
+        shape: parsed.data.shape,
+        dimensions: parsed.data.dimensions,
+        weightKg: parsed.data.weightKg,
+        silencerType: parsed.data.silencerType,
+        itemCode: parsed.data.itemCode,
+        description: parsed.data.description,
+        hsnSacType: parsed.data.hsnSacType,
+        hsnSacNo: parsed.data.hsnSacNo,
+        unitOfMeasure: parsed.data.unitOfMeasure,
+      },
+    });
+    res.status(201).json(product);
+  } catch (err) {
+    if (isUniqueViolation(err)) return res.status(400).json({ error: "An item with that Item Code or model already exists" });
+    throw err;
+  }
 });
 
 productsRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req, res) => {
@@ -58,21 +82,33 @@ productsRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), asyn
     if (modelTaken) return res.status(400).json({ error: "A product with that model already exists" });
   }
 
-  const product = await prisma.product.update({
-    where: { id },
-    data: {
-      name: data.name,
-      model: data.model,
-      ratingSpec: data.ratingSpec,
-      capacityKva: data.capacityKva,
-      warrantyMonths: data.warrantyMonths,
-      shape: data.shape,
-      dimensions: data.dimensions,
-      weightKg: data.weightKg,
-      silencerType: data.silencerType,
-    },
-  });
-  res.json(product);
+  if (data.itemCode && (await itemCodeOwner(data.itemCode, id))) return res.status(400).json({ error: ITEM_CODE_TAKEN });
+
+  try {
+    const product = await prisma.product.update({
+      where: { id },
+      data: {
+        name: data.name,
+        model: data.model,
+        ratingSpec: data.ratingSpec,
+        capacityKva: data.capacityKva,
+        warrantyMonths: data.warrantyMonths,
+        shape: data.shape,
+        dimensions: data.dimensions,
+        weightKg: data.weightKg,
+        silencerType: data.silencerType,
+        itemCode: data.itemCode,
+        description: data.description,
+        hsnSacType: data.hsnSacType,
+        hsnSacNo: data.hsnSacNo,
+        unitOfMeasure: data.unitOfMeasure,
+      },
+    });
+    res.json(product);
+  } catch (err) {
+    if (isUniqueViolation(err)) return res.status(400).json({ error: "An item with that Item Code or model already exists" });
+    throw err;
+  }
 });
 
 productsRouter.delete("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req, res) => {

@@ -159,6 +159,23 @@ export const PRODUCT_SHAPE = {
 } as const;
 export type ProductShape = (typeof PRODUCT_SHAPE)[keyof typeof PRODUCT_SHAPE];
 
+/** Item catalogue: whether the item's tax code is an HSN (goods) or a SAC (services) code. The number itself is free text for now. */
+export const HSN_SAC_TYPE = {
+  HSN: "HSN",
+  SAC: "SAC",
+} as const;
+export type HsnSacType = (typeof HSN_SAC_TYPE)[keyof typeof HSN_SAC_TYPE];
+
+/** Item catalogue: unit of measure (what one quantity of the item is counted in). Not a RECD unit. */
+export const PRODUCT_UNIT = {
+  NOS: "Nos",
+  LTR: "LTR",
+  MTR: "MTR",
+  KG: "KG",
+  SET: "SET",
+} as const;
+export type ProductUnit = (typeof PRODUCT_UNIT)[keyof typeof PRODUCT_UNIT];
+
 /** Seeded rows, not exhaustive - see seed.ts. These are the keys application code branches on. */
 export const DOCUMENT_REQUIREMENT_TYPE_KEY = {
   POLICE_VERIFICATION: "police_verification",

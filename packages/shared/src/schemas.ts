@@ -2,6 +2,7 @@ import { amcDurationFields, eitherEndOrDuration, EITHER_END_OR_DURATION_MESSAGE 
 import { emailField } from "./userPolicy";
 import { complaintStatusSchema } from "./ticketPolicy";
 import { z } from "zod";
+import { HSN_SAC_TYPE, PRODUCT_UNIT } from "./constants";
 
 export const loginSchema = z.object({
   /** Normalised (trimmed, lower case) so the same address signs in however it is typed. */
@@ -371,6 +372,16 @@ export const createProductSchema = z.object({
   dimensions: z.string().optional(),
   weightKg: z.number().optional(),
   silencerType: z.union([z.literal(1), z.literal(2)]).optional(),
+  /**
+   * Item catalogue fields. Optional on purpose: the Orders "+ New product" form and the AI assistant create items without them. The New Item popup
+   * requires Item Code, HSN/SAC and Unit for a NEW item. Item Code is stored trimmed and is unique ignoring case (checked by the API and by a database index).
+   */
+  itemCode: z.string().trim().min(1, "Enter the item code").max(60).optional(),
+  description: z.string().trim().max(2000).optional(),
+  hsnSacType: z.enum([HSN_SAC_TYPE.HSN, HSN_SAC_TYPE.SAC]).optional(),
+  /** Free text for now - no number format is enforced until the company's coding requirements are confirmed. */
+  hsnSacNo: z.string().trim().max(30).optional(),
+  unitOfMeasure: z.enum([PRODUCT_UNIT.NOS, PRODUCT_UNIT.LTR, PRODUCT_UNIT.MTR, PRODUCT_UNIT.KG, PRODUCT_UNIT.SET]).optional(),
 });
 
 export const updateProductSchema = createProductSchema.partial();

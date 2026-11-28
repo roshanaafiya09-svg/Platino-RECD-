@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { DataTable } from "@/components/DataTable";
+import { HSN_SAC_TYPE, PRODUCT_UNIT } from "@recd/shared";
 
 interface Product {
   id: string;
@@ -18,7 +19,16 @@ interface Product {
   dimensions: string | null;
   weightKg: string | null;
   silencerType: number | null;
+  itemCode: string | null;
+  description: string | null;
+  hsnSacType: string | null;
+  hsnSacNo: string | null;
+  unitOfMeasure: string | null;
 }
+
+// Label styles of the New Item popup (local to this page).
+const LABEL = "mb-1 block text-sm font-semibold text-[#0f2a66]";
+const STAR = "text-red-500";
 
 const SHAPE_OPTIONS = [
   { value: "", label: "Not set" },
@@ -26,6 +36,10 @@ const SHAPE_OPTIONS = [
   { value: "triangle", label: "Triangle" },
   { value: "rectangle", label: "Rectangle" },
 ];
+
+// The HSN/SAC type and the Unit lists come from the shared package (the API validates against the same lists). The HSN/SAC number is free text.
+const HSN_SAC_OPTIONS = Object.values(HSN_SAC_TYPE);
+const UNIT_OPTIONS = Object.values(PRODUCT_UNIT);
 
 const SILENCER_TYPE_OPTIONS = [
   { value: "", label: "Not set" },
@@ -43,6 +57,11 @@ const emptyForm = {
   dimensions: "",
   weightKg: "",
   silencerType: "",
+  itemCode: "",
+  description: "",
+  hsnSacType: "",
+  hsnSacNo: "",
+  unitOfMeasure: "",
 };
 
 export default function ProductsPage() {
@@ -114,6 +133,11 @@ function ProductsPageInner() {
       dimensions: p.dimensions ?? "",
       weightKg: p.weightKg ?? "",
       silencerType: p.silencerType != null ? String(p.silencerType) : "",
+      itemCode: p.itemCode ?? "",
+      description: p.description ?? "",
+      hsnSacType: p.hsnSacType ?? "",
+      hsnSacNo: p.hsnSacNo ?? "",
+      unitOfMeasure: p.unitOfMeasure ?? "",
     });
     setFormError(null);
     setOpen(true);
@@ -134,7 +158,17 @@ function ProductsPageInner() {
         dimensions: form.dimensions || undefined,
         weightKg: form.weightKg ? parseFloat(form.weightKg) : undefined,
         silencerType: form.silencerType ? (parseInt(form.silencerType, 10) as 1 | 2) : undefined,
+        itemCode: form.itemCode.trim() || undefined,
+        description: form.description.trim() || undefined,
+        hsnSacType: (form.hsnSacType || undefined) as "HSN" | "SAC" | undefined,
+        hsnSacNo: form.hsnSacNo.trim() || undefined,
+        unitOfMeasure: (form.unitOfMeasure || undefined) as (typeof UNIT_OPTIONS)[number] | undefined,
       };
+      // A NEW item needs its Item Code, HSN/SAC type and Unit (the popup enforces this; the API keeps them optional because the Orders form and the
+      // AI assistant also create items). Items created before these fields existed can still be edited without them.
+      if (!editing && (!body.itemCode || !body.hsnSacType || !body.unitOfMeasure)) {
+        throw new Error("Item Code, HSN/SAC and Unit are required");
+      }
       if (editing) {
         await api(`/products/${editing.id}`, { method: "PUT", body: JSON.stringify(body) });
       } else {
@@ -206,12 +240,22 @@ function ProductsPageInner() {
             ),
           },
           {
+            key: "itemCode",
+            label: "Item code",
+            accessor: (p) => p.itemCode ?? "",
+            filterType: "text",
+            render: (p) => <span className="font-mono text-xs">{p.itemCode ?? "-"}</span>,
+          },
+          {
             key: "model",
             label: "Model",
             accessor: (p) => p.model,
             filterType: "text",
             render: (p) => <span className="font-mono text-xs">{p.model}</span>,
           },
+          { key: "unitOfMeasure", label: "Unit", accessor: (p) => p.unitOfMeasure ?? "" },
+          { key: "hsnSac", label: "HSN/SAC", accessor: (p) => [p.hsnSacType, p.hsnSacNo].filter(Boolean).join(" "), defaultVisible: false },
+          { key: "description", label: "Description", accessor: (p) => p.description ?? "", defaultVisible: false, filterType: "text" },
           { key: "ratingSpec", label: "Rating spec", accessor: (p) => p.ratingSpec ?? "" },
           { key: "capacityKva", label: "Capacity (kVA)", accessor: (p) => p.capacityKva ?? "" },
           { key: "warrantyMonths", label: "Warranty (months)", accessor: (p) => p.warrantyMonths ?? "" },
@@ -258,7 +302,7 @@ function ProductsPageInner() {
                   <Link href={`/products/${p.id}`} className="text-sm font-semibold text-gray-900 truncate block hover:underline">
                     {p.name}
                   </Link>
-                  <p className="text-xs text-gray-500 mb-2 font-mono">{p.model}</p>
+                  <p className="text-xs text-gray-500 mb-2 font-mono">{p.itemCode ? `${p.itemCode} · ` : ""}{p.model}</p>
                   {p.ratingSpec && (
                     <div className="data-card-row">
                       <span className="label">Rating spec</span>
@@ -298,44 +342,117 @@ function ProductsPageInner() {
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold">{editing ? "Edit item" : "New item"}</h3>
-              <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+          {/* Wider than the shared modal and styled here only: the shared .modal-panel class is used by other screens and is not changed. */}
+          <div
+            className="modal-panel"
+            style={{ maxWidth: "46rem", padding: 0 }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="item-popup-title"
+            data-testid="item-popup"
+          >
+            <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+              <h3 id="item-popup-title" className="text-xl font-bold" style={{ color: "#0f2a66" }}>{editing ? "Edit Item" : "New Item"}</h3>
+              <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="rounded-md p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700" data-testid="item-popup-close">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </button>
             </div>
-            <form onSubmit={submit} className="space-y-3">
-              <input required placeholder="Item name" className="field w-full" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              <input required placeholder="Model (unique)" className="field w-full" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} />
-              <input placeholder="Rating spec (optional)" className="field w-full" value={form.ratingSpec} onChange={(e) => setForm({ ...form, ratingSpec: e.target.value })} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <input type="number" min={0} step="0.01" placeholder="Capacity (kVA)" className="field" value={form.capacityKva} onChange={(e) => setForm({ ...form, capacityKva: e.target.value })} />
-                <input type="number" min={0} placeholder="Warranty (months)" title="Default duration for new unit warranties. A unit keeps the duration it was recorded with." className="field" value={form.warrantyMonths} onChange={(e) => setForm({ ...form, warrantyMonths: e.target.value })} />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <select className="field" value={form.shape} onChange={(e) => setForm({ ...form, shape: e.target.value })}>
-                  {SHAPE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
-                <input type="number" min={0} step="0.01" placeholder="Weight (kg)" className="field" value={form.weightKg} onChange={(e) => setForm({ ...form, weightKg: e.target.value })} />
-              </div>
-              <input placeholder="Dimensions (e.g. 1200 x 600 x 900 mm)" className="field w-full" value={form.dimensions} onChange={(e) => setForm({ ...form, dimensions: e.target.value })} />
+            <form onSubmit={submit} className="space-y-4 px-6 py-5">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Silencer Type</label>
-                <select className="field w-full" value={form.silencerType} onChange={(e) => setForm({ ...form, silencerType: e.target.value })}>
-                  {SILENCER_TYPE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
+                <label htmlFor="item-name" className={LABEL}>Item Name <span className={STAR}>*</span></label>
+                <input id="item-name" required placeholder="Enter item name" className="field w-full" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="item-name" />
+              </div>
+              <div>
+                <label htmlFor="item-code" className={LABEL}>Item Code <span className={STAR}>*</span></label>
+                <input id="item-code" required={!editing} maxLength={60} placeholder="Enter item code" className="field w-full" value={form.itemCode} onChange={(e) => setForm({ ...form, itemCode: e.target.value })} data-testid="item-code" />
+              </div>
+              <div>
+                <label htmlFor="item-description" className={LABEL}>Description</label>
+                <textarea id="item-description" rows={3} maxLength={2000} placeholder="Enter description" className="field w-full" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} data-testid="item-description" />
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="item-hsn-sac" className={LABEL}>HSN/SAC <span className={STAR}>*</span></label>
+                  <select id="item-hsn-sac" required={!editing} className="field w-full" value={form.hsnSacType} onChange={(e) => setForm({ ...form, hsnSacType: e.target.value })} data-testid="item-hsn-sac">
+                    <option value="">Select HSN/SAC</option>
+                    {HSN_SAC_OPTIONS.map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="item-hsn-sac-no" className={LABEL}>HSN/SAC No</label>
+                  <input id="item-hsn-sac-no" maxLength={30} placeholder="Enter HSN/SAC No" className="field w-full" value={form.hsnSacNo} onChange={(e) => setForm({ ...form, hsnSacNo: e.target.value })} data-testid="item-hsn-sac-no" />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="item-unit" className={LABEL}>Unit <span className={STAR}>*</span></label>
+                  <select id="item-unit" required={!editing} className="field w-full" value={form.unitOfMeasure} onChange={(e) => setForm({ ...form, unitOfMeasure: e.target.value })} data-testid="item-unit">
+                    <option value="">Select Unit ({UNIT_OPTIONS.join(", ")})</option>
+                    {UNIT_OPTIONS.map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
-              {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
+              {/* Existing technical fields stay available (the model, the default warranty and the capacity are used across the platform). */}
+              <section className="space-y-3 border-t border-gray-200 pt-4" data-testid="item-technical-details">
+                <h4 className="text-sm font-bold" style={{ color: "#0f2a66" }}>Technical details</h4>
+                <div>
+                  <label htmlFor="item-model" className={LABEL}>Model <span className={STAR}>*</span></label>
+                  <input id="item-model" required placeholder="Model (unique)" className="field w-full" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} data-testid="item-model" />
+                </div>
+                <div>
+                  <label htmlFor="item-rating" className={LABEL}>Rating spec</label>
+                  <input id="item-rating" placeholder="Rating spec (optional)" className="field w-full" value={form.ratingSpec} onChange={(e) => setForm({ ...form, ratingSpec: e.target.value })} />
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="item-capacity" className={LABEL}>Capacity (kVA)</label>
+                    <input id="item-capacity" type="number" min={0} step="0.01" placeholder="Capacity (kVA)" className="field w-full" value={form.capacityKva} onChange={(e) => setForm({ ...form, capacityKva: e.target.value })} />
+                  </div>
+                  <div>
+                    <label htmlFor="item-warranty" className={LABEL}>Warranty (months)</label>
+                    <input id="item-warranty" type="number" min={0} placeholder="Warranty (months)" title="Default duration for new unit warranties. A unit keeps the duration it was recorded with." className="field w-full" value={form.warrantyMonths} onChange={(e) => setForm({ ...form, warrantyMonths: e.target.value })} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="item-shape" className={LABEL}>Shape</label>
+                    <select id="item-shape" className="field w-full" value={form.shape} onChange={(e) => setForm({ ...form, shape: e.target.value })}>
+                      {SHAPE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="item-weight" className={LABEL}>Weight (kg)</label>
+                    <input id="item-weight" type="number" min={0} step="0.01" placeholder="Weight (kg)" className="field w-full" value={form.weightKg} onChange={(e) => setForm({ ...form, weightKg: e.target.value })} />
+                  </div>
+                </div>
+                <div>
+                  <label htmlFor="item-dimensions" className={LABEL}>Dimensions</label>
+                  <input id="item-dimensions" placeholder="Dimensions (e.g. 1200 x 600 x 900 mm)" className="field w-full" value={form.dimensions} onChange={(e) => setForm({ ...form, dimensions: e.target.value })} />
+                </div>
+                <div>
+                  <label htmlFor="item-silencer" className={LABEL}>Silencer Type</label>
+                  <select id="item-silencer" className="field w-full" value={form.silencerType} onChange={(e) => setForm({ ...form, silencerType: e.target.value })}>
+                    {SILENCER_TYPE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </section>
+
+              {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2" role="alert" data-testid="item-popup-error">{formError}</p>}
 
               <div className="flex justify-end gap-3 pt-1">
-                <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
-                <button type="submit" disabled={saving} className="btn-primary px-4 py-2 text-sm">
-                  {saving ? (editing ? "Saving…" : "Creating…") : editing ? "Save changes" : "Create item"}
+                <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-gray-300 px-5 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors" data-testid="item-popup-cancel">Cancel</button>
+                <button type="submit" disabled={saving} className="btn-primary px-5 py-2 text-sm font-semibold" data-testid="item-popup-submit">
+                  {saving ? (editing ? "Saving…" : "Creating…") : editing ? "Save changes" : "Create Item"}
                 </button>
               </div>
             </form>

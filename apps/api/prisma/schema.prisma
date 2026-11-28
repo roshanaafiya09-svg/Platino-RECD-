@@ -211,6 +211,16 @@ model Product {
   weightKg       Decimal? @db.Decimal(10, 2)
   /// 1 or 2 - the silencer type fitted to this RECD variant.
   silencerType   Int?
+  /// Catalogue fields (the "New Item" popup). ALL optional in the database so existing rows and the other creation paths (Orders form, AI assistant,
+  /// seed) keep working. itemCode is a code of its own - it is NOT the same as model - and is unique ignoring case and surrounding spaces through a
+  /// lower("itemCode") unique index in migration 20261128090000_item_catalogue_fields (Prisma cannot express an expression index, so it is not declared here).
+  itemCode       String?
+  description    String?
+  /// HSN | SAC (HSN_SAC_TYPE in packages/shared) and its code number (free text for now: no format is enforced).
+  hsnSacType     String?
+  hsnSacNo       String?
+  /// Nos | LTR | MTR | KG | SET (PRODUCT_UNIT in packages/shared). Not to be confused with a RECD unit (RecdUnit).
+  unitOfMeasure  String?
   createdAt      DateTime @default(now())
 
   orders         Order[]

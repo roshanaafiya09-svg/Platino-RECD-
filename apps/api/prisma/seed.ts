@@ -159,6 +159,9 @@ async function seedSampleOrder(customerId: string) {
       ratingSpec: "Retrofit Emission Control Device for 250 kVA DG sets",
       capacityKva: 250,
       warrantyMonths: 24,
+      itemCode: "PLT-RECD-250",
+      hsnSacType: "HSN",
+      unitOfMeasure: "Nos",
     },
   });
 
